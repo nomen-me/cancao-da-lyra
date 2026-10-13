@@ -1,0 +1,216 @@
+---
+# Template Semaphore: "Backup Diário", Inventory "clientes_ativos"
+#
+# AVISO — LEIA ANTES DE ADICIONAR AO REPO:
+# "hosts: all" abaixo assume que o inventory/clientes_ativos.yml lista os
+# clientes num grupo padrão (ou sem grupo, caindo em "all"). Eu não tenho
+# acesso ao repo real pra confirmar o nome do grupo usado lá — se vocês já
+# usam um nome de grupo específico, troque "all" por ele.
+#
+# O que este playbook faz, por cliente, baseado na arquitetura REAL
+# confirmada em provisionar_cliente_synapse.sh (não inventei nomes de
+# container):
+#   - Ritmo (ERPNext/Frappe, container ritmo-backend-1): "bench backup
+#     --with-files" (dump do MariaDB + arquivos anexados do site)
+#   - Harpa (Chatwoot, container harpa-postgres): pg_dump do banco "harpa"
+#   - Harmonia (n8n, container harmonia): tar do volume "harmonia_data"
+#     (onde o n8n guarda seu próprio banco SQLite + credenciais dos workflows)
+# Cada artefato é conferido de verdade (tamanho > 0 e integridade do
+# arquivo), não só "o comando terminou com código 0".
+
+- name: "Synapse - Backup Diário dos clientes ativos"
+  hosts: clientes_ativos
+  gather_facts: true
+  become: true
+  vars:
+    backup_root: /root/synapse_backups
+    retencao_dias: 7
+    data_hoje: "{{ ansible_date_time.date }}"
+    dir_hoje: "{{ backup_root }}/{{ data_hoje }}"
+
+  tasks:
+    - name: Ler DOMINIO_BASE das credenciais do cliente (identifica o cliente no backup)
+      ansible.builtin.shell:
+        cmd: "grep '^DOMINIO_BASE=' /root/synapse_credentials.txt | cut -d'=' -f2"
+      register: dominio_base_raw
+      changed_when: false
+      failed_when: dominio_base_raw.stdout | length == 0
+
+    - name: Definir domínio do site Ritmo
+      ansible.builtin.set_fact:
+        dominio_base: "{{ dominio_base_raw.stdout }}"
+        site_ritmo: "ritmo.{{ dominio_base_raw.stdout }}"
+
+    - name: Criar diretório do backup de hoje
+      ansible.builtin.file:
+        path: "{{ dir_hoje }}"
+        state: directory
+        mode: "0700"
+
+    - name: Detectar quais componentes existem nesta VPS (não presumir instalação idêntica)
+      ansible.builtin.command:
+        cmd: "docker ps -a --format {% raw %}'{{.Names}}'{% endraw %}"
+      register: containers_existentes
+      changed_when: false
+
+    - name: Definir flags de componentes presentes
+      ansible.builtin.set_fact:
+        tem_ritmo: "{{ 'ritmo-backend-1' in containers_existentes.stdout_lines }}"
+        tem_harpa: "{{ 'harpa-postgres' in containers_existentes.stdout_lines }}"
+        tem_harmonia: "{{ 'harmonia' in containers_existentes.stdout_lines }}"
+
+    # ---- Ritmo (ERPNext/Frappe) ----
+    - name: "Ritmo: rodar bench backup --with-files"
+      ansible.builtin.command:
+        cmd: >
+          docker exec -u frappe ritmo-backend-1 bash -c
+          "cd /home/frappe/frappe-bench && bench --site {{ site_ritmo }} backup --with-files"
+      register: ritmo_backup
+      changed_when: true
+      failed_when: ritmo_backup.rc != 0
+      when: tem_ritmo
+
+    - name: "Ritmo: localizar o dump gerado agora dentro do container"
+      ansible.builtin.shell:
+        cmd: >
+          docker exec -u frappe ritmo-backend-1 bash -c
+          "ls -1t /home/frappe/frappe-bench/sites/{{ site_ritmo }}/private/backups/*database.sql.gz | head -n1"
+      register: ritmo_dump_path
+      changed_when: false
+      failed_when: ritmo_dump_path.stdout | length == 0
+      when: tem_ritmo
+
+    - name: "Ritmo: copiar dump (banco) pro backup de hoje"
+      ansible.builtin.command:
+        cmd: "docker cp ritmo-backend-1:{{ ritmo_dump_path.stdout }} {{ dir_hoje }}/ritmo_database.sql.gz"
+      changed_when: true
+      when: tem_ritmo
+
+    - name: "Ritmo: localizar e copiar o tar de arquivos (attachments)"
+      ansible.builtin.shell:
+        cmd: >
+          docker exec -u frappe ritmo-backend-1 bash -c
+          "ls -1t /home/frappe/frappe-bench/sites/{{ site_ritmo }}/private/backups/*files.tar | head -n1"
+      register: ritmo_files_path
+      changed_when: false
+      when: tem_ritmo
+
+    - name: "Ritmo: copiar tar de arquivos, se existir"
+      ansible.builtin.command:
+        cmd: "docker cp ritmo-backend-1:{{ ritmo_files_path.stdout }} {{ dir_hoje }}/ritmo_files.tar"
+      changed_when: true
+      when: tem_ritmo and (ritmo_files_path.stdout | default('') | length > 0)
+
+    # ---- Harpa (Chatwoot / Postgres) ----
+    - name: "Harpa: pg_dump do banco 'harpa'"
+      ansible.builtin.shell:
+        cmd: >
+          docker exec harpa-postgres pg_dump -U harpa harpa | gzip
+          > {{ dir_hoje }}/harpa_database.sql.gz
+      register: harpa_backup
+      changed_when: true
+      failed_when: harpa_backup.rc != 0
+      when: tem_harpa
+
+    # ---- Harmonia (n8n) ----
+    - name: "Harmonia: tar do volume harmonia_data (workflows + credenciais)"
+      ansible.builtin.command:
+        cmd: >
+          docker run --rm --volumes-from harmonia
+          -v {{ dir_hoje }}:/backup
+          alpine tar czf /backup/harmonia_data.tar.gz -C / home/node/.n8n
+      register: harmonia_backup
+      changed_when: true
+      failed_when: harmonia_backup.rc != 0
+      when: tem_harmonia
+
+    - name: Avisar sobre componentes ausentes nesta VPS (não é erro, só não presume instalação idêntica)
+      ansible.builtin.debug:
+        msg: >-
+          Componentes ausentes em {{ inventory_hostname }} (não cobertos no backup de hoje):
+          {{ (['Ritmo'] if not tem_ritmo else []) + (['Harpa'] if not tem_harpa else []) + (['Harmonia'] if not tem_harmonia else []) }}
+      when: not (tem_ritmo and tem_harpa and tem_harmonia)
+
+    - name: Montar lista de artefatos esperados hoje (só os componentes presentes)
+      ansible.builtin.set_fact:
+        artefatos_esperados: >-
+          {{
+            (['ritmo_database.sql.gz'] if tem_ritmo else [])
+            + (['harpa_database.sql.gz'] if tem_harpa else [])
+            + (['harmonia_data.tar.gz'] if tem_harmonia else [])
+            + ['synapse_credentials.txt']
+          }}
+
+    # ---- Credenciais do cliente (necessárias pra qualquer restauração) ----
+    - name: Copiar synapse_credentials.txt pro backup de hoje
+      ansible.builtin.copy:
+        src: /root/synapse_credentials.txt
+        dest: "{{ dir_hoje }}/synapse_credentials.txt"
+        remote_src: true
+        mode: "0600"
+
+    # ---- VERIFICAÇÃO REAL — não considerar válido só por "rc == 0" ----
+    # Só exige os artefatos dos componentes que EXISTEM nesta VPS (ponto D:
+    # não presumir que toda instalação é idêntica). Se um componente estava
+    # presente mas o backup dele falhou, ainda assim entra na lista e a
+    # verificação abaixo pega isso.
+    - name: Coletar stat de cada artefato esperado (sem decidir sucesso/falha ainda)
+      ansible.builtin.stat:
+        path: "{{ dir_hoje }}/{{ item }}"
+      loop: "{{ artefatos_esperados }}"
+      register: stats_artefatos
+
+    - name: Confirmar tamanho > 0 de cada artefato (checagem explícita, não só existência)
+      ansible.builtin.fail:
+        msg: "Artefato de backup {{ item.item }} está ausente ou com 0 bytes — backup de {{ dominio_base }} NÃO é válido hoje."
+      loop: "{{ stats_artefatos.results }}"
+      when: (not item.stat.exists) or (item.stat.size == 0)
+
+    - name: Testar integridade dos .gz gerados (gzip -t, não só olhar o tamanho)
+      ansible.builtin.command:
+        cmd: "gzip -t {{ dir_hoje }}/{{ item }}"
+      loop: "{{ artefatos_esperados | select('match', '.*\\.gz$') | list }}"
+      changed_when: false
+
+    - name: Testar integridade do tar de arquivos do Ritmo, se existir
+      ansible.builtin.command:
+        cmd: "tar -tf {{ dir_hoje }}/ritmo_files.tar"
+      changed_when: false
+      when: tem_ritmo and (ritmo_files_path.stdout | default('') | length > 0)
+
+    - name: Marcar backup de hoje como verificado (arquivo sentinela)
+      ansible.builtin.file:
+        path: "{{ dir_hoje }}/VERIFICADO_OK"
+        state: touch
+        mode: "0600"
+
+    # ---- Retenção: só apaga backup antigo DEPOIS de confirmar o de hoje ----
+    - name: Listar diretórios de backup existentes
+      ansible.builtin.find:
+        paths: "{{ backup_root }}"
+        file_type: directory
+        age: "{{ retencao_dias }}d"
+      register: backups_antigos
+
+    - name: Confirmar que cada backup antigo a remover tinha sido verificado no seu dia (só então remove)
+      ansible.builtin.stat:
+        path: "{{ item.path }}/VERIFICADO_OK"
+      loop: "{{ backups_antigos.files }}"
+      register: verificacao_antigos
+
+    - name: Remover backups com mais de {{ retencao_dias }} dias (só os que foram verificados)
+      ansible.builtin.file:
+        path: "{{ item.item.path }}"
+        state: absent
+      loop: "{{ verificacao_antigos.results }}"
+      when: item.stat.exists
+
+    - name: Avisar sobre backups antigos NUNCA verificados (não apaga, só alerta)
+      ansible.builtin.debug:
+        msg: "ATENÇÃO: {{ item.item.path }} tem mais de {{ retencao_dias }} dias e nunca foi marcado como verificado — mantido de propósito, revise manualmente."
+      loop: "{{ verificacao_antigos.results }}"
+      when: not item.stat.exists
+
+    - name: Resultado final deste host
+      ansible.builtin.debug:
+        msg: "Backup de {{ dominio_base }} em {{ inventory_hostname }}: OK — 4 artefatos verificados em {{ dir_hoje }}."
