@@ -1,0 +1,54 @@
+
+/* ===== Aprovação humana (Canção da Lyra) =====
+   A fila e a decisão vivem no RITMO (synapse_core.api.*). O Painel só apresenta e envia a decisão com a
+   sessão/CSRF do próprio operador: o Ritmo checa o papel aprovador e revalida estado, versão e TTL.
+   Nenhum token fixo, senha ou usuário especial neste HTML. */
+const APROV_MSG = {
+  executed:'Aprovada e executada.',
+  context_changed:'Aprovação obsoleta: o contexto mudou. Nada foi executado — revise e solicite nova decisão.',
+  intent_expired:'Aprovação expirada (TTL). Nada foi executado.',
+  concurrency_conflict:'O estado mudou. Nada foi executado.',
+  rejected:'Operação rejeitada.',
+  unauthorized:'Sem permissão para esta operação.'
+};
+function aprovEsc(t){ return String(t==null?'':t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function carregarAprovacoes(){
+  const box = document.getElementById('aprov-lista'); if (!box) return;
+  try{
+    const r = await Ritmo._request('/api/method/synapse_core.api.pending_approvals');
+    const ops = r.message || [];
+    const c = document.getElementById('aprov-count-tab'); if (c) c.textContent = ops.length;
+    if (!ops.length){ box.innerHTML = '<div style="opacity:.7;padding:18px 0">Nenhuma operação aguardando aprovação.</div>'; return; }
+    box.innerHTML = ops.map(o => {
+      const obsoleta = o.current_state_version !== o.decision_state_version;
+      const aviso = o.expired ? '<span style="color:#c0392b">Expirada — não pode ser aprovada.</span>'
+                  : obsoleta ? '<span style="color:#b9770e">O estado mudou desde a decisão; a aprovação será recusada pelo Ritmo.</span>' : '';
+      const args = aprovEsc(JSON.stringify(o.args));
+      const oid = aprovEsc(o.operation_id);
+      return '<div class="fstep" style="margin:10px 0;padding:14px"><div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">'
+        + '<div><b>'+aprovEsc(o.action)+'</b> · '+aprovEsc(o.entity_type)+' '+aprovEsc(o.entity_id)
+        + '<div style="font-size:11.5px;opacity:.75;margin-top:4px">Validade até '+aprovEsc(o.intent_expires_at)+' · versão da decisão '+aprovEsc(o.decision_state_version)+' · versão atual '+aprovEsc(o.current_state_version)+'</div>'
+        + '<div style="font-size:11.5px;margin-top:4px;word-break:break-all">'+args+'</div><div style="font-size:12px;margin-top:6px">'+aviso+'</div></div>'
+        + '<div style="display:flex;gap:8px;align-items:flex-start">'
+        + '<button class="syn-btn" data-aprov-op="'+oid+'" data-aprov-acao="approve" '+(o.expired?'disabled':'')+'><i class="fa-solid fa-check"></i> Aprovar</button>'
+        + '<button class="syn-btn ghost" data-aprov-op="'+oid+'" data-aprov-acao="reject"><i class="fa-solid fa-xmark"></i> Rejeitar</button>'
+        + '</div></div></div>';
+    }).join('');
+    box.querySelectorAll('[data-aprov-op]').forEach(b => b.addEventListener('click', () => decidirAprovacao(b.dataset.aprovOp, b.dataset.aprovAcao)));
+  }catch(e){
+    box.innerHTML = '<div style="color:#c0392b;padding:12px 0">'+(e.message==='SESSAO_INVALIDA'?'Sua sessão expirou ou você não tem permissão de aprovador.':aprovEsc(e.message))+'</div>';
+  }
+}
+async function decidirAprovacao(operationId, acao){
+  let body = { operation_id: operationId };
+  if (acao === 'reject'){ const m = prompt('Motivo da rejeição (opcional):'); if (m === null) return; if (m) body.reason = m; }
+  try{
+    const r = await Ritmo._request('/api/method/synapse_core.api.' + acao, { method:'POST', body });
+    const st = (r.message && r.message.status) || '';
+    toast(APROV_MSG[st] || ('Estado: '+st), st === 'executed' || st === 'rejected' ? 'ok' : 'err');
+  }catch(e){
+    toast(e.message === 'SESSAO_INVALIDA' ? 'Sem permissão para aprovar/rejeitar.' : ('Falha: '+e.message), 'err');
+  }
+  carregarAprovacoes();
+}
+

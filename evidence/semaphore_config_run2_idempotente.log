@@ -1,0 +1,84 @@
+[INFO] Auditando estado atual da VPS de gerenciamento...
+[OK] Serviço systemd 'semaphore' já está ativo — instalação preservada, não vou reinstalar.
+[INFO] Autenticando na API do Semaphore...
+[OK] Token de API existente em /root/.semaphore_synapse/credenciais.env reutilizado (ainda válido).
+[OK] Semaphore respondendo — versão 2.19.12-012ed06-1788086244, modo de instalação: systemd.
+[INFO] Verificando projeto 'Synapse'...
+[OK] Projeto 'Synapse' já existe (id 1) — preservado.
+[INFO] Verificando Key Store...
+[OK] Chave 'ssh-clientes' já existe no Key Store (id 2) — preservada, não recriada.
+[OK] Chave de acesso ao Git 'github-nomen-me' já existe (id 3) — preservada.
+[INFO] GIT_AUTH=none: repositório público/local, sem escrita — o conteúdo já deve estar no repositório (bundle fixado).
+[INFO] Verificando repositório...
+[OK] Repositório file:///home/claude/work/sem/repo_bundle já existe (id 1) — preservado.
+[INFO] Verificando Environment 'synapse-secrets'...
+[OK] Environment 'synapse-secrets' já existe (id 1).
+[OK] Environment 'synapse-secrets' atualizado só nas chaves que estavam vazias/ausentes.
+[INFO] Verificando Inventory 'clientes_ativos'...
+[OK] Inventory 'clientes_ativos' já existe (id 1) — preservado.
+[INFO] Verificando templates...
+[OK] Template 'Provisionar Cliente' já existe (id 1) — preservado, não recriado.
+[OK] Template 'Atualizar Cliente' já existe (id 2) — preservado, não recriado.
+[OK] Template 'Backup Diário' já existe (id 3) — preservado, não recriado.
+[OK] Template 'Validar Integracao' já existe (id 4) — preservado, não recriado.
+[INFO] Verificando agendamento do Backup Diário...
+[OK] Fuso horário do sistema detectado: Etc/UTC — '0 3 * * *' vai rodar às 03:00 nesse fuso.
+[OK] Agendamento do 'Backup Diário' já existe (id 1) — preservado. Fuso do sistema atual: Etc/UTC (se você mudou o fuso da VPS depois de criar este agendamento, confira se ainda corresponde ao horário desejado — não altero um agendamento já existente automaticamente).
+[OK] Integracao 'n8n-provisionar-cliente' ja existe (id 1)  alinhada ao template/segredo atuais.
+[OK] Integracao 'n8n-validar-integracao' ja existe (id 2)  alinhada ao template/segredo atuais.
+
+============================================================
+  SEMAPHORE — CONFIGURAÇÃO SYNAPSE: RELATÓRIO
+============================================================
+1. Recursos criados nesta execução:
+  (nada)
+
+2. Recursos existentes e preservados (não tocados):
+  - Instalação existente do Semaphore (serviço systemd, binário ?) — não reinstalada
+  - Token de API do Semaphore existente (reutilizado, não regerado)
+  - Semaphore ativo — versão 2.19.12-012ed06-1788086244, modo systemd
+  - Projeto 'Synapse' (id 1)
+  - Chave SSH 'ssh-clientes' no Key Store (id 2)
+  - Chave de acesso ao Git 'github-nomen-me' (id 3)
+  - Repositório file:///home/claude/work/sem/repo_bundle (id 1)
+  - Inventory 'clientes_ativos' (id 1)
+  - Template 'Provisionar Cliente' (id 1)
+  - Template 'Atualizar Cliente' (id 2)
+  - Template 'Backup Diário' (id 3)
+  - Template 'Validar Integracao' (id 4)
+  - Agendamento do Backup Diário (id 1) — fuso do sistema hoje: Etc/UTC
+  - Segredo 'n8n-integracao-token' (id 4)  valor preservado
+  - Integracao 'n8n-provisionar-cliente' (id 1)
+  - Integracao 'n8n-validar-integracao' (id 2)
+
+3. Recursos existentes e corrigidos (estavam incompletos, completados com segurança):
+  - Environment 'synapse-secrets' — já existia mas faltavam variáveis; completadas nesta execução (as que já tinham valor não foram tocadas)
+
+4. Etapas pendentes (NÃO considere concluído):
+  (nenhuma pendência)
+
+Templates confirmados via API neste projeto agora:
+  - Atualizar Cliente (id 2)
+  - Backup Diário (id 3)
+  - Provisionar Cliente (id 1)
+  - Validar Integracao (id 4)
+
+Integracao n8n -> Semaphore criada automaticamente (ver secoes 1-3).
+
+5. Testes ESTÁTICOS realizados (sintaxe, não funcional):
+  - bash -n em configurar_semaphore_synapse.sh
+  - yaml.safe_load nos três playbooks e no inventory stub
+  - Teste isolado do script scripts/registrar_cliente_inventario.py (inserção + idempotência)
+
+6. Testes FUNCIONAIS realmente executados NESTA execução do script:
+  - Instalação/identificação do Semaphore: SIM — versão 2.19.12-012ed06-1788086244 confirmada via /api/info
+  - Existência do projeto Synapse: SIM — confirmado via API (id 1)
+  - Existência dos recursos configurados: SIM — cada um confirmado via GET antes de decidir criar/preservar (ver seções 1-4 acima)
+  - Conectividade SSH real com uma VPS de cliente: não executado — TEST_VPS_IP não foi exportado nesta execução
+  - Execução do template 'Provisionar Cliente' em VPS de teste: validada pelo instalador (ciclo n8n -> Semaphore -> Ansible)
+  - Execução do template 'Atualizar Cliente' em VPS de teste: validada pelo instalador (ciclo n8n -> Semaphore -> Ansible)
+  - Execução do 'Backup Diário' com verificação de artefato: agendado para 03:00 Etc/UTC
+  - Segunda execução do script (idempotência): NÃO testada nesta chamada — rode o script de novo e confira se a seção 1 (criados) fica vazia
+  - Comportamento após falha parcial: NÃO testado nesta chamada
+============================================================
+PASS  Semaphore configurado sem pendencias.

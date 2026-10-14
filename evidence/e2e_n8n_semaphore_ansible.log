@@ -1,0 +1,8 @@
+1) sem token na Harmonia      -> (401, '{"accepted":false,"status":401,"reason":"token invalido"}')
+2) token errado               -> (401, '{"accepted":false,"status":401,"reason":"token invalido"}')
+3) dominio invalido           -> (400, '{"accepted":false,"status":400,"reason":"dominio invalido (FQDN)"}')
+4) operacao invalida          -> (400, '{"accepted":false,"status":400,"reason":"operacao deve ser provisionar|validar"}')
+   tasks criadas ate aqui: 0 (esperado 0)
+5) contrato valido (validar)  -> (202, '{"accepted":true,"operacao":"validar","dominio":"lojademo.com.br","vps_ip":"203.0.113.10"}')
+   task no Semaphore: 6 success template 4 (4 = Validar Integracao)
+   > "msg": "INTEGRACAO_OK vps_ip=203.0.113.10 dominio=lojademo.com.br nome_loja=Loja Demo"

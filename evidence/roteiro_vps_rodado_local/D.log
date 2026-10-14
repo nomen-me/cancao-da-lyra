@@ -1,0 +1,7 @@
+insert_many invalido: http=417
+[2026-09-30T10:20:40+00:00] apos falha: item/evento = 0	0
+insert_many valido: http=200
+[2026-09-30T10:20:40+00:00] apos sucesso: item/evento = 1	1
+5	5064c2c0-c92b-43e2-b9de-5b7fdc627f41	PENDING	item.created
+6	a60d59ce-62fc-4589-9f1e-8eff26001aae	PENDING	item.created
+RESULT D: PASS

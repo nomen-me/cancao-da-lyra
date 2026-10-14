@@ -1,0 +1,8 @@
+{"status":"executed","operation_id":"vps-J-1790763641863566768","replayed":true,"result":{"doctype":"Sales Order","name":"SAL-ORD-2026-00077"}}
+{"status":"executed","operation_id":"vps-J-1790763641863566768","replayed":true,"result":{"doctype":"Sales Order","name":"SAL-ORD-2026-00077"}}
+{"status":"executed","operation_id":"vps-J-1790763641863566768","replayed":true,"result":{"doctype":"Sales Order","name":"SAL-ORD-2026-00077"}}
+{"status":"executed","operation_id":"vps-J-1790763641863566768","replayed":true,"result":{"doctype":"Sales Order","name":"SAL-ORD-2026-00077"}}
+{"status":"executed","operation_id":"vps-J-1790763641863566768","replayed":true,"result":{"doctype":"Sales Order","name":"SAL-ORD-2026-00077"}}
+{"status":"executed","operation_id":"vps-J-1790763641863566768","result":{"doctype":"Sales Order","name":"SAL-ORD-2026-00077"}}
+[2026-09-30T10:20:42+00:00] SO com synapse_op_id=vps-J-1790763641863566768: 1
+RESULT J: PASS

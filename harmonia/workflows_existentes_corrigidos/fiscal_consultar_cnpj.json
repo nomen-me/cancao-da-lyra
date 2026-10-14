@@ -1,0 +1,139 @@
+{
+ "name": "Synapse — Fiscal — Consultar CNPJ",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "fiscal/consultar-cnpj",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-cnpj",
+   "name": "Webhook — Consultar CNPJ",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const cnpj = String($json.cnpj || '').replace(/[^0-9A-Za-z]/g, '').toUpperCase();\n\nif (cnpj.length !== 14) {\n  throw new Error('CNPJ inválido: precisa ter 14 caracteres');\n}\n\nreturn [{ json: { cnpj } }];\n"
+   },
+   "id": "valida-cnpj",
+   "name": "Valida e Formata CNPJ",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://brasilapi.com.br/api/cnpj/v1/{{$json.cnpj}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "User-Agent",
+       "value": "Synapse/1.0 (suporte@synapse.com.br)"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "brasilapi-cnpj",
+   "name": "BrasilAPI — Consulta CNPJ",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "Gratuita, sem chave/cadastro — dado público da Receita Federal. ATENÇÃO: a BrasilAPI ainda tem issue aberta (github.com/BrasilAPI/BrasilAPI #789, aberta em abr/2026, sem fix até ago/2026) pra tratar CNPJ alfanumérico corretamente — CNPJs numéricos continuam OK, alfanuméricos podem vir como 'não encontrado' até a BrasilAPI corrigir isso do lado deles. O erro já cai no fallback gracioso existente ('CNPJ não encontrado ou serviço indisponível'), então não trava nada — só osso duro de roer externo."
+  },
+  {
+   "parameters": {
+    "jsCode": "const input = $input.first().json;\n\nconst sucesso = !input.error && !!input.cnpj;\n\nconst dados = sucesso ? {\n  razao_social: input.razao_social || '',\n  nome_fantasia: input.nome_fantasia || input.razao_social || '',\n  endereco: [\n    input.logradouro,\n    input.numero,\n    input.bairro,\n    input.municipio,\n    input.uf\n  ].filter(Boolean).join(', '),\n  cnae: input.cnae_fiscal_descricao || ''\n} : null;\n\nreturn [{\n  json: {\n    sucesso,\n    dados,\n    erro: sucesso ? null : 'CNPJ não encontrado ou serviço indisponível no momento'\n  }\n}];\n"
+   },
+   "id": "formata-resposta-cnpj",
+   "name": "Formata Resposta pro Painel",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json.sucesso ? $json.dados : { error: $json.erro } }}",
+    "options": {
+     "responseCode": "={{$json.sucesso ? 200 : 400}}"
+    }
+   },
+   "id": "responde-cnpj",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1120,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Consultar CNPJ": {
+   "main": [
+    [
+     {
+      "node": "Valida e Formata CNPJ",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Valida e Formata CNPJ": {
+   "main": [
+    [
+     {
+      "node": "BrasilAPI — Consulta CNPJ",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "BrasilAPI — Consulta CNPJ": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pro Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pro Painel": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

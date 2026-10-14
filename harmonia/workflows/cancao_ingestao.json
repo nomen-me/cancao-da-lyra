@@ -1,0 +1,838 @@
+{
+ "name": "Synapse — Canção — Ingestão de Eventos (Harmonia)",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "synapse-evento",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "n01",
+   "name": "Webhook — Evento do Outbox (Ritmo)",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    200,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "// Logica deterministica da Harmonia (Ordem Final secoes 8, 10, 13, 14). Sem I/O.\n// Este arquivo e a UNICA fonte: build_workflows.py o embute nos nos Code do n8n e os testes o importam.\nconst SUPPORTED_SCHEMAS = ['1'];\nconst ORIGIN_ACTORS = ['HUMAN', 'LYRA', 'SYSTEM'];\nconst REQUIRED = ['event_id', 'seq', 'root_event_id', 'chain_id', 'origin_actor', 'entity_type', 'entity_id', 'event_type', 'state_version', 'event_timestamp', 'causal_depth', 'schema_version'];\n\n// Politica do gate: CONTRATO EXPLICITO por natureza de evento (nao por valor monetario).\n// Evento fora de qualquer lista => UNKNOWN: registrado e sinalizado, NUNCA encaminhado a Lyra nem executado.\nconst GATE_POLICY = {\n  // Eventos de controle do ciclo (respostas do Ritmo a operacoes) - a Lyra precisa reagir a eles.\n  FORWARD_CONTROL: ['concurrency_conflict', 'context_changed', 'intent_expired', 'approval_requested', 'approval_rejected', 'operation_failed', 'operation_unauthorized'],\n  // Eventos de negocio com contrato de decisao (acoes suportadas pela camada de execucao: criar/confirmar/cancelar venda).\n  FORWARD_BUSINESS: ['sales_order.created', 'sales_order.submitted', 'sales_order.cancelled'],\n  IGNORE_TYPES: ['state_snapshot', 'synapse.state_changed', 'operation_held'],\n  AGGREGATE_TYPES: ['item.stock_changed', 'item.price_changed', 'item.updated', 'customer.updated'],\n};\n\nfunction validate(env) {\n  if (!env || typeof env !== 'object') return { ok: false, reason: 'envelope ausente' };\n  for (const k of REQUIRED) {\n    if (env[k] === undefined || env[k] === null || env[k] === '') return { ok: false, reason: 'campo obrigatorio ausente: ' + k };\n  }\n  if (!SUPPORTED_SCHEMAS.includes(String(env.schema_version))) return { ok: false, reason: 'schema_version nao suportada: ' + env.schema_version };\n  if (!ORIGIN_ACTORS.includes(env.origin_actor)) return { ok: false, reason: 'origin_actor invalido: ' + env.origin_actor };\n  if (env.payload && env.payload.__unparseable__) return { ok: false, reason: 'payload corrompido (JSON invalido)' };\n  if (!Number.isInteger(env.seq) || !Number.isInteger(env.state_version)) return { ok: false, reason: 'seq/state_version nao inteiros' };\n  return { ok: true };\n}\n\n// IGNORE | AGGREGATE | FORWARD | UNKNOWN. origin_actor=LYRA NAO e motivo de supressao: o controle e causal (profundidade).\nfunction gate(env) {\n  const t = env.event_type;\n  if (GATE_POLICY.FORWARD_CONTROL.includes(t) || GATE_POLICY.FORWARD_BUSINESS.includes(t)) return { action: 'FORWARD', agg_key: null };\n  if (GATE_POLICY.IGNORE_TYPES.includes(t)) return { action: 'IGNORE', agg_key: null };\n  if (GATE_POLICY.AGGREGATE_TYPES.includes(t)) return { action: 'AGGREGATE', agg_key: aggKey(env) };\n  return { action: 'UNKNOWN', agg_key: null };\n}\n\nfunction aggKey(env) { return env.event_type + '|' + env.entity_type + '|' + env.entity_id; }\n\n\n\nconst env = $json.body;\nconst v = validate(env);\nif (!v.ok) return [{ json: { ok: false, reason: v.reason, event_id: env && env.event_id, schema_version: env && env.schema_version } }];\nreturn [{ json: { ok: true, env, gate: gate(env), event_id: env.event_id } }];"
+   },
+   "id": "n02",
+   "name": "Valida e Classifica (gate determinístico)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    440,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.ok}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n03",
+   "name": "Envelope Válido?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.outbox_failed",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({event_id: $json.event_id, reason: $json.reason, schema_version: $json.schema_version ? String($json.schema_version) : null})}}",
+    "options": {}
+   },
+   "id": "n04",
+   "name": "Ritmo — Registra Falha (retry → DLQ)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    920,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 422
+    }
+   },
+   "id": "n05",
+   "name": "Responde 422 (será reentregue até a DLQ)",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1160,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.outbox_ack",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({event_id: $json.event_id})}}",
+    "options": {}
+   },
+   "id": "n06",
+   "name": "Ritmo — ACK",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    920,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst prev = $node['Valida e Classifica (gate determinístico)'].json;\nconst ack = $input.first().json.message || {};\n// duplicado so e descartado se ja concluido; ACK-sem-PROCESSED (ex.: timeout da Lyra) e REPROCESSADO (seguro: operation_id deterministico)\nreturn [{ json: { ...prev, duplicate: !!ack.duplicate && ['PROCESSED','DEAD_LETTER'].includes(ack.status), ack } }];"
+   },
+   "id": "n07",
+   "name": "Interpreta ACK (dedup)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1160,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.duplicate}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n08",
+   "name": "Duplicado?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1400,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 200
+    }
+   },
+   "id": "n09",
+   "name": "Responde 200 (duplicado ignorado)",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1640,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{($json.ack.predecessor_pending || []).length > 0}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n10",
+   "name": "Predecessor pendente?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1640,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 202
+    }
+   },
+   "id": "n11",
+   "name": "Responde 202 (aguarda predecessor; segue ACK, sera reentregue)",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1880,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.gate_mark",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({event_id: $json.event_id, gate_action: $json.gate.action, agg_key: $json.gate.agg_key})}}",
+    "options": {}
+   },
+   "id": "n12",
+   "name": "Ritmo — Registra Decisão do Gate",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1640,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\n// Nós HTTP substituem $json pela resposta do Ritmo: reanexa envelope + decisão do gate para os próximos passos.\nreturn [{ json: { ...$node['Interpreta ACK (dedup)'].json } }];"
+   },
+   "id": "n13",
+   "name": "Contexto do Evento (pós-gate)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1760,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.gate.action === 'FORWARD'}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n14",
+   "name": "Vai para a Lyra?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1880,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "={{$env.LYRA_CENTRAL_URL}}/v1/decide",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "Authorization",
+       "value": "=Bearer {{$env.LYRA_API_KEY}}"
+      },
+      {
+       "name": "X-Tenant-ID",
+       "value": "={{$env.LYRA_TENANT_ID}}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({event: $json.env, trigger: 'event'})}}",
+    "options": {
+     "timeout": 60000
+    }
+   },
+   "id": "n15",
+   "name": "Lyra Central — Decide",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2120,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst prev = $node['Interpreta ACK (dedup)'].json;\nconst ops = ($input.first().json.operations || []);\nif (!ops.length) return [{ json: { ...prev, sem_operacao: true } }];\nreturn ops.map(o => ({ json: { ...prev, operation: o, sem_operacao: false } }));"
+   },
+   "id": "n16",
+   "name": "Monta Operações",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2360,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.sem_operacao === false}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n17",
+   "name": "Tem Operação?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    2600,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.execute",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({operation: $json.operation})}}",
+    "options": {}
+   },
+   "id": "n18",
+   "name": "Ritmo — Executa (autoridade)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2840,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.gate.action === 'AGGREGATE'}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n19",
+   "name": "Agregar (aguarda flush)?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    2120,
+    450
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.outbox_processed",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({event_ids: [$node[\"Interpreta ACK (dedup)\"].json.event_id]})}}",
+    "options": {}
+   },
+   "id": "n20",
+   "name": "Ritmo — PROCESSED",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    3080,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 200
+    }
+   },
+   "id": "n21",
+   "name": "Responde 200",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    3320,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.HARMONIA_DOMAIN}}/webhook/synapse-flush-agora",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({agg_key: $json.gate.agg_key})}}",
+    "options": {
+     "timeout": 5000
+    }
+   },
+   "id": "n22",
+   "name": "Harmonia — Aciona flush imediato (MAX_EVENTS)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2360,
+    450
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 200
+    }
+   },
+   "id": "n23",
+   "name": "Responde 200 (agregado)",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    2600,
+    450
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst ns = ($input.first().json.notifications || []).filter(n => n.conversa_id);\nif (!ns.length) return [{ json: { sem_notificacao: true } }];\nreturn ns.map(n => ({ json: n }));"
+   },
+   "id": "n24",
+   "name": "Extrai Notificações (Harpa)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2360,
+    650
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.sem_notificacao !== true}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n25",
+   "name": "Há notificação?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    2600,
+    650
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations/{{$json.conversa_id}}/messages",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({content: $json.text, message_type: 'outgoing', private: !!$json.private})}}",
+    "options": {}
+   },
+   "id": "n26",
+   "name": "Harpa — Envia Notificação (reconfirmação / aprovação)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2840,
+    650
+   ],
+   "retryOnFail": true,
+   "maxTries": 3
+  }
+ ],
+ "connections": {
+  "Webhook — Evento do Outbox (Ritmo)": {
+   "main": [
+    [
+     {
+      "node": "Valida e Classifica (gate determinístico)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Valida e Classifica (gate determinístico)": {
+   "main": [
+    [
+     {
+      "node": "Envelope Válido?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Envelope Válido?": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — ACK",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Ritmo — Registra Falha (retry → DLQ)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Registra Falha (retry → DLQ)": {
+   "main": [
+    [
+     {
+      "node": "Responde 422 (será reentregue até a DLQ)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — ACK": {
+   "main": [
+    [
+     {
+      "node": "Interpreta ACK (dedup)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Interpreta ACK (dedup)": {
+   "main": [
+    [
+     {
+      "node": "Duplicado?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Duplicado?": {
+   "main": [
+    [
+     {
+      "node": "Responde 200 (duplicado ignorado)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Predecessor pendente?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Predecessor pendente?": {
+   "main": [
+    [
+     {
+      "node": "Responde 202 (aguarda predecessor; segue ACK, sera reentregue)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Ritmo — Registra Decisão do Gate",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Registra Decisão do Gate": {
+   "main": [
+    [
+     {
+      "node": "Contexto do Evento (pós-gate)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Contexto do Evento (pós-gate)": {
+   "main": [
+    [
+     {
+      "node": "Vai para a Lyra?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Vai para a Lyra?": {
+   "main": [
+    [
+     {
+      "node": "Lyra Central — Decide",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Agregar (aguarda flush)?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Lyra Central — Decide": {
+   "main": [
+    [
+     {
+      "node": "Monta Operações",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Extrai Notificações (Harpa)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Operações": {
+   "main": [
+    [
+     {
+      "node": "Tem Operação?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai Notificações (Harpa)": {
+   "main": [
+    [
+     {
+      "node": "Há notificação?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Há notificação?": {
+   "main": [
+    [
+     {
+      "node": "Harpa — Envia Notificação (reconfirmação / aprovação)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Tem Operação?": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Executa (autoridade)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Ritmo — PROCESSED",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Executa (autoridade)": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — PROCESSED",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Agregar (aguarda flush)?": {
+   "main": [
+    [
+     {
+      "node": "Harmonia — Aciona flush imediato (MAX_EVENTS)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Ritmo — PROCESSED",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Harmonia — Aciona flush imediato (MAX_EVENTS)": {
+   "main": [
+    [
+     {
+      "node": "Responde 200 (agregado)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — PROCESSED": {
+   "main": [
+    [
+     {
+      "node": "Responde 200",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

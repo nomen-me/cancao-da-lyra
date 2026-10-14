@@ -1,0 +1,9 @@
+Queda e retorno da Lyra (Ritmo + n8n 2.40.7 + Lyra Central reais; Chatwoot = receptor HTTP stand-in; sem Gemini)
+### Lyra DESLIGADA (http=000)
+   relay: {'sent': 0, 'failed': 1}
+   seq=1 intent_expired  ACK  gate=FORWARD  retry=0   -> recebido, NAO processado, recuperavel
+### Lyra RELIGADA
+   relay: {'sent': 1, 'failed': 0}
+   seq=1 intent_expired  PROCESSED  gate=FORWARD
+   relay (reexecucao): {'sent': 0, 'failed': 0}
+mensagens entregues a conversa 89: 1 (sem duplicacao)

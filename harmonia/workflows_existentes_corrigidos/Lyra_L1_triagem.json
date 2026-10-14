@@ -1,0 +1,869 @@
+{
+ "name": "Lyra — L1 — Triagem (via Lyra Central)",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "synapse-atendimento",
+    "responseMode": "immediately",
+    "options": {}
+   },
+   "id": "webhook-chat",
+   "name": "Webhook — Nova Mensagem Synapse Chat",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst tenant_id = body.tenant_id;\nconst plano = body.plano || 'essencial';\nconst conversa_id = body.conversa_id;\nconst mensagem = body.mensagem || '';\nconst historico = body.historico_conversa || [];\nconst perfil_cliente = body.perfil_cliente || {};\nconst canal = body.canal || 'synapse_chat';\n\n// Curto-circuito: se um humano já assumiu essa conversa (status/assignee\n// vindo do Chatwoot), a Lyra fica muda — não reabre uma conversa que já\n// foi escalada, mesmo que chegue mensagem nova do cliente nesse meio-tempo.\nconst ja_escalada = body.status_conversa === 'open' && !!body.assignee_id;\n\n// Detecção de pedido explícito de humano — feita aqui, ANTES de chamar a\n// Lyra Central, porque não depende de IA nenhuma e é mais rápida/barata.\n// Lista de frases é heurística, não NLU — ajustar conforme aparecerem\n// variações reais de uso que não caiam aqui.\nconst FRASES_PEDIDO_HUMANO = [\n  'falar com humano', 'falar com atendente', 'falar com uma pessoa',\n  'falar com alguem', 'quero um atendente', 'quero falar com atendente',\n  'atendimento humano', 'transferir para atendente', 'transferir pra atendente',\n  'nao quero falar com robo', 'nao quero falar com bot', 'quero uma pessoa real'\n];\nconst mensagemNormalizada = mensagem\n  .toLowerCase()\n  .normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''); // remove acentos pra comparar\nconst pedido_explicito_humano = FRASES_PEDIDO_HUMANO.some(f => mensagemNormalizada.includes(f));\n\n// ia_suggestion (não \"modo\") pra bater com o node \"Modo Autónomo ou Sugestão?\"\n// original, que já checa exatamente esse campo — mantido sem alteração.\nconst ia_suggestion = plano === 'essencial';\n\nreturn [{\n  json: {\n    tenant_id, plano, conversa_id, mensagem, historico, perfil_cliente, canal,\n    ja_escalada, pedido_explicito_humano, ia_suggestion\n  }\n}];"
+   },
+   "id": "parse-and-route",
+   "name": "Extrai Payload e Detecta Pedido Explícito de Humano",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "strict"
+     },
+     "conditions": [
+      {
+       "id": "c1",
+       "leftValue": "={{$json.pedido_explicito_humano}}",
+       "rightValue": true,
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "options": {}
+   },
+   "id": "pediu-humano",
+   "name": "Pediu Humano Explicitamente?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2,
+   "position": [
+    1120,
+    620
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "return [{\n  json: {\n    ...$json,\n    resposta: 'Claro! Vou te transferir para um atendente humano agora mesmo.',\n    escalar: true,\n    motivo_escalamento: 'Cliente pediu explicitamente para falar com um humano'\n  }\n}];"
+   },
+   "id": "prepara-resp-humano",
+   "name": "Prepara Resposta (Pedido Explícito)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1340,
+    620
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const mensagens = (($json.historico || []).slice(-10)).map(m => ({\n  role: m.de === 'cliente' ? 'user' : 'assistant',\n  content: m.txt\n}));\nmensagens.push({ role: 'user', content: $json.mensagem });\n\nconst corpo = {\n  tenant_id: $env.LYRA_TENANT_ID,\n  conversation_id: $json.conversa_id,\n  messages: mensagens,\n  context: {\n    channel: $json.canal,\n    perfil_cliente: $json.perfil_cliente\n  },\n  tools_available: [\n    'gerenciar_cadastro', 'mecanismo_captura_lead', 'processar_pedido',\n    'faturamento_expedicao', 'consultar_pedido', 'verificar_estoque'\n  ]\n};\n\nreturn [{ json: { ...$json, corpo_requisicao: corpo } }];"
+   },
+   "id": "monta-req-l1",
+   "name": "Monta Requisição pro Lyra Central",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1120,
+    400
+   ],
+   "notes": "tools_available com as 6 funções da lyra_functions.json — a Lyra Central já conhece o schema de cada uma centralmente, aqui só libera quais valem pra essa chamada."
+  },
+  {
+   "parameters": {
+    "url": "={{$env.LYRA_CENTRAL_URL}}/v1/chat",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "Authorization",
+       "value": "=Bearer {{$env.LYRA_API_KEY}}"
+      },
+      {
+       "name": "X-Tenant-ID",
+       "value": "={{$env.LYRA_TENANT_ID}}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify($json.corpo_requisicao)}}",
+    "options": {
+     "response": {
+      "response": {
+       "responseFormat": "text"
+      }
+     }
+    },
+    "method": "POST"
+   },
+   "id": "call-lyra-central",
+   "name": "Lyra Central — Processa Mensagem",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1340,
+    400
+   ],
+   "continueOnFail": true,
+   "notes": "Contrato oficial da Lyra Central — resposta SSE (text/event-stream), por isso Response Format = text nas Options."
+  },
+  {
+   "parameters": {
+    "jsCode": "function parseSSE(texto) {\n  const blocos = texto.split(/\\r?\\n\\r?\\n/).filter(Boolean);\n  let tokens = '';\n  let functionCall = null;\n  let finishReason = null;\n  for (const bloco of blocos) {\n    const linhas = bloco.split(/\\r?\\n/);\n    let evento = null;\n    let dadosTexto = '';\n    for (const linha of linhas) {\n      if (linha.startsWith('event:')) evento = linha.slice(6).trim();\n      if (linha.startsWith('data:')) dadosTexto += linha.slice(5).trim();\n    }\n    if (!evento || !dadosTexto) continue;\n    let dados;\n    try { dados = JSON.parse(dadosTexto); } catch (e) { continue; }\n    if (evento === 'token') tokens += (dados.text || '');\n    if (evento === 'function_call') functionCall = dados;\n    if (evento === 'done') finishReason = dados.finish_reason;\n  }\n  return { tokens, functionCall, finishReason };\n}const meta = $node['Monta Requisição pro Lyra Central'].json;\nconst bruto = $input.first().json.data ?? $input.first().json.body ?? $input.first().json;\nconst texto = typeof bruto === 'string' ? bruto : JSON.stringify(bruto);\nconst { tokens, functionCall, finishReason } = parseSSE(texto);\n\nreturn [{\n  json: {\n    ...meta,\n    texto_resposta: tokens,\n    function_call: functionCall,\n    finish_reason: finishReason,\n    tem_function_call: !!functionCall\n  }\n}];"
+   },
+   "id": "parse-response",
+   "name": "Parseia Eventos SSE",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1560,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "strict"
+     },
+     "conditions": [
+      {
+       "id": "c1",
+       "leftValue": "={{$json.tem_function_call}}",
+       "rightValue": true,
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "options": {}
+   },
+   "id": "precisa-funcao",
+   "name": "Precisa Chamar Função?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2,
+   "position": [
+    1780,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const fc = $json.function_call;\n\n// Ações de alto impacto (mexem em dinheiro/pedido) vão pro L3, que tem\n// as validações extras (motivo obrigatório em cancelar/estornar, etc).\n// O resto (consultas e cadastro) vai pro L2. Mesmo critério do L1 original.\nconst FUNCOES_L3 = ['processar_pedido', 'faturamento_expedicao'];\nconst camada = FUNCOES_L3.includes(fc.name) ? 'l3' : 'l2';\n\n// nome_funcao/argumentos_funcao (não function_call.name/arguments) pra bater\n// com \"Chama L3\"/\"Chama L2\" originais, que já leem exatamente esses campos.\nreturn [{\n  json: {\n    ...$json,\n    camada,\n    nome_funcao: fc.name,\n    argumentos_funcao: fc.arguments\n  }\n}];"
+   },
+   "id": "decide-camada",
+   "name": "Decide L2 ou L3",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2000,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const meta = $node['Decide L2 ou L3'].json;\nconst resultadoFuncao = $input.first().json;\n\nconst corpo = {\n  tenant_id: $env.LYRA_TENANT_ID,\n  conversation_id: meta.conversa_id,\n  call_id: meta.function_call.call_id,\n  result: resultadoFuncao\n};\n\nreturn [{ json: { ...meta, corpo_requisicao: corpo, resultado_funcao: resultadoFuncao } }];"
+   },
+   "id": "monta-tool-result",
+   "name": "Monta Tool-Result",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2440,
+    380
+   ]
+  },
+  {
+   "parameters": {
+    "url": "={{$env.LYRA_CENTRAL_URL}}/v1/chat/tool-result",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "Authorization",
+       "value": "=Bearer {{$env.LYRA_API_KEY}}"
+      },
+      {
+       "name": "X-Tenant-ID",
+       "value": "={{$env.LYRA_TENANT_ID}}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify($json.corpo_requisicao)}}",
+    "options": {
+     "response": {
+      "response": {
+       "responseFormat": "text"
+      }
+     }
+    },
+    "method": "POST"
+   },
+   "id": "call-lyra-tool-result",
+   "name": "Lyra Central — Confirma Execução",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2660,
+    380
+   ],
+   "continueOnFail": true,
+   "notes": "Contrato oficial seção 4.3 — devolve resposta final em linguagem natural já sabendo o resultado real da ação (sucesso ou erro)."
+  },
+  {
+   "parameters": {
+    "jsCode": "function parseSSE(texto) {\n  const blocos = texto.split(/\\r?\\n\\r?\\n/).filter(Boolean);\n  let tokens = '';\n  let functionCall = null;\n  let finishReason = null;\n  for (const bloco of blocos) {\n    const linhas = bloco.split(/\\r?\\n/);\n    let evento = null;\n    let dadosTexto = '';\n    for (const linha of linhas) {\n      if (linha.startsWith('event:')) evento = linha.slice(6).trim();\n      if (linha.startsWith('data:')) dadosTexto += linha.slice(5).trim();\n    }\n    if (!evento || !dadosTexto) continue;\n    let dados;\n    try { dados = JSON.parse(dadosTexto); } catch (e) { continue; }\n    if (evento === 'token') tokens += (dados.text || '');\n    if (evento === 'function_call') functionCall = dados;\n    if (evento === 'done') finishReason = dados.finish_reason;\n  }\n  return { tokens, functionCall, finishReason };\n}const meta = $node['Monta Tool-Result'].json;\nconst bruto = $input.first().json.data ?? $input.first().json.body ?? $input.first().json;\nconst texto = typeof bruto === 'string' ? bruto : JSON.stringify(bruto);\nconst { tokens } = parseSSE(texto);\n\nconst sucesso = meta.resultado_funcao?.sucesso !== false;\n\nreturn [{\n  json: {\n    ...meta,\n    resposta: tokens || 'Prontinho!',\n    escalar: !sucesso,\n    motivo_escalamento: sucesso ? null : (meta.resultado_funcao?.erro || 'Não consegui concluir essa ação')\n  }\n}];"
+   },
+   "id": "parse-final",
+   "name": "Parseia Resposta Final e Define Escalonamento",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2880,
+    380
+   ],
+   "notes": "escalar=true quando a função (L2/L3) volta com sucesso:false — mesmo sinal de 'não conseguiu resolver' que o L1 original usava, sem precisar de campo novo no contrato."
+  },
+  {
+   "parameters": {
+    "jsCode": "return [{\n  json: {\n    ...$json,\n    resposta: $json.texto_resposta || 'Não consegui gerar uma resposta agora.',\n    escalar: false,\n    motivo_escalamento: null\n  }\n}];"
+   },
+   "id": "prepara-resp-sem-funcao",
+   "name": "Prepara Resposta (Sem Ação Necessária)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2000,
+    520
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.ia_suggestion}}",
+       "value2": false
+      }
+     ]
+    }
+   },
+   "id": "route-mode",
+   "name": "Modo Autónomo ou Sugestão?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    3100,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations/{{$json.conversa_id}}/messages",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"content\": \"{{$json.resposta}}\",\n  \"message_type\": \"outgoing\",\n  \"private\": false\n}",
+    "method": "POST"
+   },
+   "id": "send-synapse-chat",
+   "name": "Synapse Chat — Envia Resposta Autónoma",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    3320,
+    280
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations/{{$json.conversa_id}}/messages",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"content\": \"💡 Lyra sugere: {{$json.resposta}}\",\n  \"message_type\": \"outgoing\",\n  \"private\": true\n}",
+    "method": "POST"
+   },
+   "id": "send-suggestion",
+   "name": "Synapse Chat — Envia Sugestão Privada",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    3320,
+    520
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.escalar}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "check-escalate",
+   "name": "Escalar para Humano?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    3540,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations/{{$json.conversa_id}}/labels",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"labels\": [\"lyra-escalou\", \"requer-humano\"]}",
+    "method": "POST"
+   },
+   "id": "label-escalate",
+   "name": "Synapse Chat — Tag Escalamento",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    3760,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Issue",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"subject\": \"Lyra escalou atendimento — conversa {{$json.conversa_id}}\",\n  \"description\": \"Conversa Synapse Chat: {{$json.conversa_id}}\\nMotivo: {{$json.motivo_escalamento}}\",\n  \"priority\": \"High\",\n  \"status\": \"Open\",\n  \"custom_canal\": \"synapse-atendimento\"\n}",
+    "method": "POST"
+   },
+   "id": "create-ticket",
+   "name": "Synapse ERP — Abre Ticket Alta Prioridade",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    3980,
+    300
+   ],
+   "notes": "Campos 'sentimento'/'intencao' removidos do corpo — eram classificação estruturada que o Gemini direto devolvia; o contrato /v1/chat da Lyra Central não tem campo equivalente documentado. Se isso for reintroduzido depois (função dedicada ou novo campo no contrato), volta pra cá."
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.ja_escalada}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "conversa-ja-escalada",
+   "name": "Conversa Já Escalada?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    680,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{ {\"pausado\": true, \"motivo\": \"conversa já com atendente humano\"} }}",
+    "options": {}
+   },
+   "id": "responde-pausada",
+   "name": "Lyra Pausada (Humano Já Assumiu)",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    900,
+    560
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "string": [
+      {
+       "value1": "={{$json.camada}}",
+       "operation": "equal",
+       "value2": "l3"
+      }
+     ]
+    }
+   },
+   "id": "e-l3",
+   "name": "É L3?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    2220,
+    380
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.HARMONIA_DOMAIN}}/webhook/lyra-l3-acao",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ funcao: $json.nome_funcao, argumentos: $json.argumentos_funcao, conversa_id: $json.conversa_id, tenant_id: $json.tenant_id }) }}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "chama-l3",
+   "name": "Chama L3 (Ações de Alto Impacto)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2440,
+    260
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.HARMONIA_DOMAIN}}/webhook/lyra-l2-consulta",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ funcao: $json.nome_funcao, argumentos: $json.argumentos_funcao, conversa_id: $json.conversa_id, tenant_id: $json.tenant_id }) }}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "chama-l2",
+   "name": "Chama L2 (Consultas de Negócio)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2440,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations/{{$json.conversa_id}}/toggle_status",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"status\": \"open\"}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "marca-conversa-aberta",
+   "name": "Synapse Chat — Marca Conversa Aberta (Pausa Lyra)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    3760,
+    520
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Nova Mensagem Synapse Chat": {
+   "main": [
+    [
+     {
+      "node": "Extrai Payload e Detecta Pedido Explícito de Humano",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai Payload e Detecta Pedido Explícito de Humano": {
+   "main": [
+    [
+     {
+      "node": "Conversa Já Escalada?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Conversa Já Escalada?": {
+   "main": [
+    [
+     {
+      "node": "Lyra Pausada (Humano Já Assumiu)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Pediu Humano Explicitamente?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Pediu Humano Explicitamente?": {
+   "main": [
+    [
+     {
+      "node": "Prepara Resposta (Pedido Explícito)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Monta Requisição pro Lyra Central",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Prepara Resposta (Pedido Explícito)": {
+   "main": [
+    [
+     {
+      "node": "Modo Autónomo ou Sugestão?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Requisição pro Lyra Central": {
+   "main": [
+    [
+     {
+      "node": "Lyra Central — Processa Mensagem",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Lyra Central — Processa Mensagem": {
+   "main": [
+    [
+     {
+      "node": "Parseia Eventos SSE",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Parseia Eventos SSE": {
+   "main": [
+    [
+     {
+      "node": "Precisa Chamar Função?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Precisa Chamar Função?": {
+   "main": [
+    [
+     {
+      "node": "Decide L2 ou L3",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Prepara Resposta (Sem Ação Necessária)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Prepara Resposta (Sem Ação Necessária)": {
+   "main": [
+    [
+     {
+      "node": "Modo Autónomo ou Sugestão?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Decide L2 ou L3": {
+   "main": [
+    [
+     {
+      "node": "É L3?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "É L3?": {
+   "main": [
+    [
+     {
+      "node": "Chama L3 (Ações de Alto Impacto)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Chama L2 (Consultas de Negócio)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chama L3 (Ações de Alto Impacto)": {
+   "main": [
+    [
+     {
+      "node": "Monta Tool-Result",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chama L2 (Consultas de Negócio)": {
+   "main": [
+    [
+     {
+      "node": "Monta Tool-Result",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Tool-Result": {
+   "main": [
+    [
+     {
+      "node": "Lyra Central — Confirma Execução",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Lyra Central — Confirma Execução": {
+   "main": [
+    [
+     {
+      "node": "Parseia Resposta Final e Define Escalonamento",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Parseia Resposta Final e Define Escalonamento": {
+   "main": [
+    [
+     {
+      "node": "Modo Autónomo ou Sugestão?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Modo Autónomo ou Sugestão?": {
+   "main": [
+    [
+     {
+      "node": "Synapse Chat — Envia Resposta Autónoma",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Synapse Chat — Envia Sugestão Privada",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Synapse Chat — Envia Resposta Autónoma": {
+   "main": [
+    [
+     {
+      "node": "Escalar para Humano?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Synapse Chat — Envia Sugestão Privada": {
+   "main": [
+    [
+     {
+      "node": "Escalar para Humano?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Escalar para Humano?": {
+   "main": [
+    [
+     {
+      "node": "Synapse Chat — Tag Escalamento",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Synapse Chat — Marca Conversa Aberta (Pausa Lyra)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "Synapse Chat — Tag Escalamento": {
+   "main": [
+    [
+     {
+      "node": "Synapse ERP — Abre Ticket Alta Prioridade",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

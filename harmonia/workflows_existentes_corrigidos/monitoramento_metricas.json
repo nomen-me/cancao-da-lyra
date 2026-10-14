@@ -1,0 +1,101 @@
+{
+ "name": "Synapse — Monitoramento — Métricas (proxy Netdata)",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "monitoramento/metricas",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-metricas",
+   "name": "Webhook — Métricas",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=http://netdata:19999/api/v1/data",
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "chart",
+       "value": "={{$json.chart}}"
+      },
+      {
+       "name": "points",
+       "value": "={{$json.points || 1}}"
+      },
+      {
+       "name": "format",
+       "value": "={{$json.format || 'json'}}"
+      },
+      {
+       "name": "after",
+       "value": "={{$json.after ?? -1}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "netdata-proxy",
+   "name": "Netdata — Consulta Chart",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    460,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "Proxy puro — Harmonia está na mesma rede interna do Netdata, o navegador do lojista não. Sem cache/histórico aqui: o painel já faz 3 chamadas (cpu/ram/disco) e monta o percentual sozinho em calcularPercentualNetdata(). Nada novo pra manter."
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-metricas",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    680,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Métricas": {
+   "main": [
+    [
+     {
+      "node": "Netdata — Consulta Chart",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Netdata — Consulta Chart": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

@@ -1,0 +1,196 @@
+{
+ "doctype": "DocType",
+ "name": "Synapse Autonomia",
+ "module": "Synapse Core",
+ "custom": 0,
+ "engine": "InnoDB",
+ "issingle": 1,
+ "fields": [
+  {
+   "fieldname": "sec_estado",
+   "fieldtype": "Section Break",
+   "label": "Estado operacional"
+  },
+  {
+   "fieldname": "estado_operacional",
+   "fieldtype": "Select",
+   "label": "Estado operacional",
+   "options": "HEALTHY\nRECONCILING\nCONSISTENT_STATE",
+   "default": "HEALTHY"
+  },
+  {
+   "fieldname": "estado_desde",
+   "fieldtype": "Datetime",
+   "label": "Desde"
+  },
+  {
+   "fieldname": "motivo",
+   "fieldtype": "Small Text",
+   "label": "Motivo"
+  },
+  {
+   "fieldname": "sec_wm",
+   "fieldtype": "Section Break",
+   "label": "Watermark"
+  },
+  {
+   "fieldname": "watermark_processed_seq",
+   "fieldtype": "Int",
+   "label": "Watermark (ultima seq contigua PROCESSED)",
+   "default": "0"
+  },
+  {
+   "fieldname": "watermark_ack_seq",
+   "fieldtype": "Int",
+   "label": "Ultima seq contigua ACK",
+   "default": "0"
+  },
+  {
+   "fieldname": "gap_from",
+   "fieldtype": "Int",
+   "label": "Gap de"
+  },
+  {
+   "fieldname": "gap_to",
+   "fieldtype": "Int",
+   "label": "Gap ate"
+  },
+  {
+   "fieldname": "gap_resolvido_ate",
+   "fieldtype": "Int",
+   "label": "Gaps irrecuperaveis resolvidos por resync ate a seq",
+   "default": "0"
+  },
+  {
+   "fieldname": "last_heartbeat_at",
+   "fieldtype": "Datetime",
+   "label": "Ultimo heartbeat"
+  },
+  {
+   "fieldname": "sec_cfg",
+   "fieldtype": "Section Break",
+   "label": "Configuracao"
+  },
+  {
+   "fieldname": "causal_depth_limit",
+   "fieldtype": "Int",
+   "label": "causal_depth_limit",
+   "default": "20"
+  },
+  {
+   "fieldname": "outbox_retention_days",
+   "fieldtype": "Int",
+   "label": "Retencao do Outbox (dias)",
+   "default": "7"
+  },
+  {
+   "fieldname": "purge_batch_size",
+   "fieldtype": "Int",
+   "label": "Purge - tamanho do lote",
+   "default": "500"
+  },
+  {
+   "fieldname": "hold_ttl_padrao_segundos",
+   "fieldtype": "Int",
+   "label": "TTL padrao de intencao (s)",
+   "default": "300"
+  },
+  {
+   "fieldname": "aprovacao_ttl_segundos",
+   "fieldtype": "Int",
+   "label": "TTL de aprovacao humana (s)",
+   "default": "3600"
+  },
+  {
+   "fieldname": "agg_max_events",
+   "fieldtype": "Int",
+   "label": "Agregacao MAX_EVENTS",
+   "default": "10"
+  },
+  {
+   "fieldname": "agg_max_wait_seconds",
+   "fieldtype": "Int",
+   "label": "Agregacao MAX_WAIT (s)",
+   "default": "120"
+  },
+  {
+   "fieldname": "agg_flush_lease_seconds",
+   "fieldtype": "Int",
+   "label": "Agregacao - lease do flush (s)",
+   "default": "300"
+  },
+  {
+   "fieldname": "dlq_max_tentativas",
+   "fieldtype": "Int",
+   "label": "DLQ - tentativas antes de isolar",
+   "default": "3"
+  },
+  {
+   "fieldname": "heartbeat_max_lag_segundos",
+   "fieldtype": "Int",
+   "label": "Heartbeat - atraso maximo (s)",
+   "default": "120"
+  },
+  {
+   "fieldname": "redelivery_after_seconds",
+   "fieldtype": "Int",
+   "label": "Reentrega apos (s)",
+   "default": "60"
+  },
+  {
+   "fieldname": "doctypes_monitorados",
+   "fieldtype": "Small Text",
+   "label": "DocTypes monitorados (JSON)",
+   "default": "[\"Sales Order\",\"Sales Invoice\",\"Payment Entry\",\"Item\",\"Item Price\",\"Stock Ledger Entry\",\"Customer\",\"Delivery Note\"]"
+  },
+  {
+   "fieldname": "acoes_exigem_aprovacao",
+   "fieldtype": "Small Text",
+   "label": "Acoes que exigem aprovacao humana (JSON)",
+   "default": "[\"cancelar_venda\"]"
+  },
+  {
+   "fieldname": "acoes_autonomas_permitidas",
+   "fieldtype": "Small Text",
+   "label": "Acoes autonomas permitidas (JSON)",
+   "default": "[\"criar_venda\",\"confirmar_venda\",\"cancelar_venda\"]"
+  },
+  {
+   "fieldname": "papel_aprovador",
+   "fieldtype": "Data",
+   "label": "Papel aprovador",
+   "default": "Sales Manager"
+  },
+  {
+   "fieldname": "usuario_automacao",
+   "fieldtype": "Data",
+   "label": "Usuario de automacao (origem SYSTEM)"
+  },
+  {
+   "fieldname": "harmonia_ingest_url",
+   "fieldtype": "Data",
+   "label": "URL de ingestao da Harmonia"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 0,
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 0,
+   "report": 1
+  },
+  {
+   "role": "Synapse Automacao",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 0,
+   "report": 1
+  }
+ ]
+}

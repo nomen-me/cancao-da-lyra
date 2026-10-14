@@ -1,0 +1,130 @@
+{
+ "name": "Synapse — Envio — Consultar Situação",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "envio/situacao",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-envio-situacao",
+   "name": "Webhook — Consultar Situação do Envio",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "filters",
+       "value": "=[[\"name\",\"like\",\"%{{$json.pedidoId}}%\"]]"
+      },
+      {
+       "name": "fields",
+       "value": "[\"name\",\"custom_tracking_code\",\"custom_transportadora\",\"custom_entregue\"]"
+      },
+      {
+       "name": "limit_page_length",
+       "value": "1"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "ritmo-busca-invoice",
+   "name": "Ritmo — Busca Fatura do Pedido",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    460,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "Só leitura — o W2_logistica é quem mantém custom_tracking_code/custom_transportadora/custom_entregue atualizados a cada 6h. Esta rota nunca fala com o Melhor Envio."
+  },
+  {
+   "parameters": {
+    "jsCode": "const input = $input.first().json;\nconst invoice = (input.data || [])[0];\n\n// Nesta primeira versão só temos tracking_code/transportadora/entregue\n// (o que o W2 já grava hoje). Isso dá pra montar um status de 4 etapas\n// com segurança. Uma linha do tempo mais granular (etiqueta gerada,\n// coletado, saiu para entrega) exigiria o W2 também gravar o campo\n// 'status' bruto do Melhor Envio — ainda não persistido, hoje ele só é\n// usado de passagem pra montar a mensagem de WhatsApp. Ver nota separada.\nconst ETAPAS = ['Pedido aprovado', 'Etiqueta gerada e em trânsito', 'Entregue'];\n\nif (!invoice) {\n  return [{ json: { sucesso: false, erro: 'Pedido não encontrado' } }];\n}\n\nlet etapaAtual = 0;\nif (invoice.custom_tracking_code) etapaAtual = 1;\nif (invoice.custom_entregue == 1) etapaAtual = 2;\n\nreturn [{\n  json: {\n    sucesso: true,\n    codigo: invoice.custom_tracking_code || null,\n    transportadora: invoice.custom_transportadora || null,\n    etapas: ETAPAS,\n    etapaAtual\n  }\n}];\n"
+   },
+   "id": "formata-resposta-envio",
+   "name": "Formata Resposta pro Painel",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-envio-situacao",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    900,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Consultar Situação do Envio": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Busca Fatura do Pedido",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Busca Fatura do Pedido": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pro Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pro Painel": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

@@ -1,0 +1,144 @@
+{
+ "name": "Synapse — Fiscal — Certificado Senha",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "fiscal/certificado-senha",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-cert-senha",
+   "name": "Webhook — Certificado Senha",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const empresa = $json.empresa;\nconst senha = $json.senha;\nif (!empresa) { throw new Error('empresa não informada'); }\nif (!senha) { throw new Error('senha não informada'); }\nreturn [{ json: { empresa, senha } }];"
+   },
+   "id": "valida-cert-senha",
+   "name": "Valida Entrada",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Company/{{$json.empresa}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({ synapse_certificado_senha: $json.senha })}}",
+    "options": {},
+    "method": "PUT"
+   },
+   "id": "grava-cert-senha",
+   "name": "Ritmo — Grava Senha no Company",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "O campo synapse_certificado_senha é fieldtype Password no DocType — o Frappe já criptografa esse valor no banco automaticamente (mecanismo nativo do fieldtype Password), sem precisar de nenhuma criptografia extra aqui. É por isso que essa senha passa pelo Harmonia (server-side) em vez do navegador gravar direto: o navegador não tem a API key do Ritmo, só o Harmonia tem."
+  },
+  {
+   "parameters": {
+    "jsCode": "const ok = !$json.error;\nreturn [{ json: { sucesso: ok, erro: ok ? null : 'Não foi possível salvar a senha do certificado agora' } }];"
+   },
+   "id": "formata-resposta-cert",
+   "name": "Formata Resposta pro Painel",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-cert-senha",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1120,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Certificado Senha": {
+   "main": [
+    [
+     {
+      "node": "Valida Entrada",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Valida Entrada": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Grava Senha no Company",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Grava Senha no Company": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pro Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pro Painel": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

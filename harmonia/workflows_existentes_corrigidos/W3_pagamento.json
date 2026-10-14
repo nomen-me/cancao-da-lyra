@@ -1,0 +1,1164 @@
+{
+ "name": "Synapse W3 — Pagamento e Baixa Automática (InfinitePay)",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "erpnext-new-invoice",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-new-invoice",
+   "name": "Webhook ERPNext — Fatura Criada",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "text",
+    "responseBody": "ok",
+    "options": {}
+   },
+   "id": "respond",
+   "name": "Responde OK",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    460,
+    180
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst doc = body.doc || body;\n\nreturn [{\n  json: {\n    invoice_id: doc.name,\n    customer: doc.customer,\n    customer_name: doc.customer_name,\n    mobile_no: (doc.contact_mobile || '').replace(/\\D/g, ''),\n    valor: parseFloat(doc.grand_total || 0).toFixed(2),\n    vencimento: doc.due_date || new Date(Date.now() + 24*60*60*1000).toISOString().split('T')[0]\n  }\n}];"
+   },
+   "id": "parse-invoice",
+   "name": "Extrai Dados da Fatura",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "https://api.infinitepay.io/v2/charges",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Bearer {{$env.INFINITEPAY_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"amount\": {{ Math.round($json.valor * 100) }},\n  \"currency\": \"BRL\",\n  \"payment_method\": \"pix\",\n  \"capture\": true,\n  \"description\": \"Pedido #{{$json.invoice_id}}\",\n  \"metadata\": {\n    \"invoice_id\": \"{{$json.invoice_id}}\",\n    \"customer\": \"{{$json.customer}}\"\n  },\n  \"pix\": {\n    \"expiration_date\": \"{{$json.vencimento}}T23:59:59Z\"\n  }\n}",
+    "method": "POST"
+   },
+   "id": "create-pix",
+   "name": "InfinitePay — Gera Pix",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$node['Extrai Dados da Fatura'].json.invoice_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"custom_infinitepay_charge_id\": \"{{$json.id}}\",\n  \"custom_pix_qr_code\": \"{{$json.pix.qr_code}}\",\n  \"custom_payment_status\": \"aguardando_pagamento\"\n}",
+    "method": "PUT"
+   },
+   "id": "save-pix",
+   "name": "ERPNext — Salva Dados do Pix",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"inbox_id\": {{$env.CHATWOOT_WHATSAPP_INBOX_ID}},\n  \"meta\": { \"sender\": { \"phone_number\": \"{{$json.telefone_normalizado}}\" } },\n  \"message\": {\n    \"content\": \"Olá *{{$node['Extrai Dados da Fatura'].json.customer_name}}*! 💳\\n\\nSeu pedido *#{{$node['Extrai Dados da Fatura'].json.invoice_id}}* está pronto.\\n\\n💰 Valor: *R$ {{$node['Extrai Dados da Fatura'].json.valor}}*\\n\\nCopie o código Pix abaixo:\\n\\n`{{$json.pix.qr_code}}`\\n\\n⏰ Válido por 24 horas.\"\n  }\n}",
+    "method": "POST"
+   },
+   "id": "whatsapp-pix",
+   "name": "WhatsApp — Envia Pix",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "rule": {
+     "interval": [
+      {
+       "field": "hours",
+       "hoursInterval": 23
+      }
+     ]
+    }
+   },
+   "id": "lembrete-trigger",
+   "name": "Trigger Lembrete 23h",
+   "type": "n8n-nodes-base.scheduleTrigger",
+   "typeVersion": 1,
+   "position": [
+    240,
+    600
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice?filters=[[\"custom_payment_status\",\"=\",\"aguardando_pagamento\"]]&fields=[\"name\",\"customer_name\",\"contact_mobile\",\"grand_total\",\"custom_pix_qr_code\",\"creation\"]",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "id": "get-pending",
+   "name": "ERPNext — Busca Pagamentos Pendentes",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    460,
+    600
+   ]
+  },
+  {
+   "parameters": {
+    "fieldToSplitOut": "data",
+    "options": {}
+   },
+   "id": "split-pending",
+   "name": "Split Pagamentos",
+   "type": "n8n-nodes-base.splitOut",
+   "typeVersion": 1,
+   "position": [
+    680,
+    600
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const invoice = $input.first().json;\nconst criacao = new Date(invoice.creation);\nconst agora = new Date();\nconst horas = (agora - criacao) / (1000 * 60 * 60);\n\nreturn [{\n  json: {\n    ...invoice,\n    horas_pendente: Math.floor(horas),\n    deve_lembrar: horas >= 23 && horas < 47,\n    deve_cancelar: horas >= 48\n  }\n}];"
+   },
+   "id": "check-age",
+   "name": "Verifica Idade do Pagamento",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    600
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.deve_lembrar}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "should-remind",
+   "name": "Deve Lembrar?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1120,
+    520
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.deve_cancelar}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "should-cancel",
+   "name": "Deve Cancelar?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1120,
+    680
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"inbox_id\": {{$env.CHATWOOT_WHATSAPP_INBOX_ID}},\n  \"meta\": { \"sender\": { \"phone_number\": \"{{$json.telefone_normalizado}}\" } },\n  \"message\": {\n    \"content\": \"⚠️ *{{$json.customer_name}}*, seu pedido *#{{$json.name}}* ainda aguarda pagamento.\\n\\n💰 Valor: *R$ {{$json.grand_total}}*\\n\\nPix:\\n`{{$json.custom_pix_qr_code}}`\\n\\n⏰ Cancela automaticamente em 24h.\"\n  }\n}",
+    "method": "POST"
+   },
+   "id": "whatsapp-lembrete",
+   "name": "WhatsApp — Envia Lembrete",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1340,
+    520
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$json.name}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "{\"custom_payment_status\": \"cancelado\"}",
+    "method": "PUT"
+   },
+   "id": "cancel-invoice",
+   "name": "ERPNext — Cancela Fatura",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1340,
+    680
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"inbox_id\": {{$env.CHATWOOT_WHATSAPP_INBOX_ID}},\n  \"meta\": { \"sender\": { \"phone_number\": \"{{$json.telefone_normalizado}}\" } },\n  \"message\": {\n    \"content\": \"Seu pedido *#{{$json.name}}* foi cancelado por falta de pagamento.\\n\\nSe quiser refazer, estamos aqui! 😊\"\n  }\n}",
+    "method": "POST"
+   },
+   "id": "whatsapp-cancelamento",
+   "name": "WhatsApp — Notifica Cancelamento",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1560,
+    680
+   ]
+  },
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "infinitepay-webhook",
+    "responseMode": "immediately",
+    "options": {}
+   },
+   "id": "webhook-infinitepay",
+   "name": "Webhook InfinitePay — Pagamento",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    900
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "string": [
+      {
+       "value1": "={{$json.body.status}}",
+       "operation": "equal",
+       "value2": "approved"
+      }
+     ]
+    }
+   },
+   "id": "payment-approved",
+   "name": "Pagamento Aprovado?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    460,
+    900
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$json.body.metadata.invoice_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"custom_payment_status\": \"pago\", \"custom_data_pagamento\": \"{{$now.toISODate()}}\"}",
+    "method": "PUT"
+   },
+   "id": "baixa-fatura",
+   "name": "ERPNext — Baixa Fatura",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    900
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$node['Webhook InfinitePay — Pagamento'].json.body.metadata.invoice_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "id": "get-invoice",
+   "name": "ERPNext — Busca Dados da Fatura",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    900
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"inbox_id\": {{$env.CHATWOOT_WHATSAPP_INBOX_ID}},\n  \"meta\": { \"sender\": { \"phone_number\": \"{{$json.telefone_normalizado}}\" } },\n  \"message\": {\n    \"content\": \"✅ Pagamento confirmado! Obrigado, *{{$json.data.customer_name}}*.\\n\\nSeu pedido *#{{$json.data.name}}* já está em separação. Em breve você recebe o rastreio. 📦\"\n  }\n}",
+    "method": "POST"
+   },
+   "id": "whatsapp-confirmacao",
+   "name": "WhatsApp — Confirma Pagamento",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1120,
+    900
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{ ($json.data || []).length > 0 }}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "tem-pendentes",
+   "name": "Tem Pagamentos Pendentes?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    680,
+    460
+   ]
+  },
+  {
+   "parameters": {},
+   "id": "nada-pendente",
+   "name": "Nenhum Pagamento Pendente (encerra limpo)",
+   "type": "n8n-nodes-base.noOp",
+   "typeVersion": 1,
+   "position": [
+    900,
+    560
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const doc = $json;\nlet raw = String($node['Extrai Dados da Fatura'].json.mobile_no || '').replace(/\\D/g, '');\nlet telefone_normalizado;\nif (raw.startsWith('55') && raw.length >= 12) {\n  telefone_normalizado = '+' + raw;\n} else if (raw.length === 10 || raw.length === 11) {\n  telefone_normalizado = '+55' + raw;\n} else {\n  telefone_normalizado = '+' + raw;\n}\nreturn [{ json: { ...doc, telefone_normalizado } }];\n"
+   },
+   "id": "normaliza-tel-0-whatsapp-envia-pix",
+   "name": "Normaliza Telefone (WhatsApp — Envia Pix)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const doc = $json;\nlet raw = String(($json.contact_mobile || '').replace(/\\D/g, '') || '').replace(/\\D/g, '');\nlet telefone_normalizado;\nif (raw.startsWith('55') && raw.length >= 12) {\n  telefone_normalizado = '+' + raw;\n} else if (raw.length === 10 || raw.length === 11) {\n  telefone_normalizado = '+55' + raw;\n} else {\n  telefone_normalizado = '+' + raw;\n}\nreturn [{ json: { ...doc, telefone_normalizado } }];\n"
+   },
+   "id": "normaliza-tel-1-whatsapp-envia-lembrete",
+   "name": "Normaliza Telefone (WhatsApp — Envia Lembrete)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const doc = $json;\nlet raw = String(($json.contact_mobile || '').replace(/\\D/g, '') || '').replace(/\\D/g, '');\nlet telefone_normalizado;\nif (raw.startsWith('55') && raw.length >= 12) {\n  telefone_normalizado = '+' + raw;\n} else if (raw.length === 10 || raw.length === 11) {\n  telefone_normalizado = '+55' + raw;\n} else {\n  telefone_normalizado = '+' + raw;\n}\nreturn [{ json: { ...doc, telefone_normalizado } }];\n"
+   },
+   "id": "normaliza-tel-2-whatsapp-notifica-cancelamento",
+   "name": "Normaliza Telefone (WhatsApp — Notifica Cancelamento)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const doc = $json;\nlet raw = String(($json.data?.contact_mobile || '').replace(/\\D/g, '') || '').replace(/\\D/g, '');\nlet telefone_normalizado;\nif (raw.startsWith('55') && raw.length >= 12) {\n  telefone_normalizado = '+' + raw;\n} else if (raw.length === 10 || raw.length === 11) {\n  telefone_normalizado = '+55' + raw;\n} else {\n  telefone_normalizado = '+' + raw;\n}\nreturn [{ json: { ...doc, telefone_normalizado } }];\n"
+   },
+   "id": "normaliza-tel-3-whatsapp-confirma-pagamento",
+   "name": "Normaliza Telefone (WhatsApp — Confirma Pagamento)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const crypto = require('crypto');\nconst assinaturaRecebida = ($json.headers && $json.headers['x-infinitepay-signature']) || '';\nconst corpoBruto = JSON.stringify($json.body || {});\nconst secreto = $env.INFINITEPAY_WEBHOOK_SECRET || '';\nconst assinaturaEsperada = crypto.createHmac('sha256', secreto).update(corpoBruto).digest('hex');\nconst valido = !!secreto && assinaturaRecebida === assinaturaEsperada;\nreturn [{ json: { ...$json, assinatura_valida: valido } }];\n"
+   },
+   "id": "valida-assinatura-ip",
+   "name": "Valida Assinatura InfinitePay",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    700
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.assinatura_valida}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "assinatura-valida-if",
+   "name": "Assinatura Válida?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    680,
+    700
+   ]
+  },
+  {
+   "parameters": {},
+   "id": "rejeita-webhook-falso",
+   "name": "Rejeita (assinatura inválida)",
+   "type": "n8n-nodes-base.noOp",
+   "typeVersion": 1,
+   "position": [
+    900,
+    780
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Item",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "filters",
+       "value": "=[[\"item_code\",\"in\",{{JSON.stringify(($json.data.items||[]).map(i=>i.item_code))}}]]"
+      },
+      {
+       "name": "fields",
+       "value": "[\"item_code\",\"custom_recurso_digital\"]"
+      },
+      {
+       "name": "limit_page_length",
+       "value": "0"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-recursos-digitais",
+   "name": "Ritmo — Busca Recurso Digital dos Itens",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1200,
+    500
+   ],
+   "continueOnFail": true,
+   "notes": "custom_recurso_digital: único campo novo modelado, direto no Item (texto livre — link, código ou instrução). Sem pool, sem alocação por venda — se um produto precisar de código único no futuro, essa é a peça isolada a acrescentar, não agora."
+  },
+  {
+   "parameters": {
+    "jsCode": "const fatura = $node['ERPNext — Busca Dados da Fatura'].json.data;\nconst itensComRecurso = $input.first().json.data || [];\n\nconst mapa = {};\nfor (const i of itensComRecurso) { if (i.custom_recurso_digital) mapa[i.item_code] = i.custom_recurso_digital; }\n\nconst recursos = (fatura.items || [])\n  .filter(i => mapa[i.item_code])\n  .map(i => `• ${i.item_name || i.item_code}: ${mapa[i.item_code]}`);\n\nlet telRaw = String(fatura.contact_mobile || '').replace(/\\D/g, '');\nlet telefone = null;\nif (telRaw) telefone = telRaw.startsWith('55') && telRaw.length >= 12 ? '+' + telRaw : '+55' + telRaw;\nconst email = fatura.contact_email || null;\n\nconst canal = telefone ? 'whatsapp' : (email ? 'email' : 'nenhum');\n\nreturn [{\n  json: {\n    temRecurso: recursos.length > 0,\n    mensagem: `✅ Aqui está o que você comprou, *${fatura.customer_name}*:\\n\\n${recursos.join('\\n')}\\n\\nPedido #${fatura.name}.`,\n    telefone, email, canal, invoiceName: fatura.name\n  }\n}];\n"
+   },
+   "id": "monta-entrega-digital",
+   "name": "Monta Entrega (canal + mensagem)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1420,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.temRecurso}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "tem-item-digital",
+   "name": "Tem Item Digital?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1640,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "rules": {
+     "rules": [
+      {
+       "value2": "whatsapp",
+       "output": 0
+      },
+      {
+       "value2": "email",
+       "output": 1
+      },
+      {
+       "value2": "nenhum",
+       "output": 2
+      }
+     ]
+    },
+    "value1": "={{$json.canal}}"
+   },
+   "id": "escolhe-canal",
+   "name": "Escolhe Canal (Chatwoot)",
+   "type": "n8n-nodes-base.switch",
+   "typeVersion": 1,
+   "position": [
+    1860,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"inbox_id\": {{$env.CHATWOOT_WHATSAPP_INBOX_ID}},\n  \"meta\": { \"sender\": { \"phone_number\": \"{{$json.telefone}}\" } },\n  \"message\": { \"content\": \"{{$json.mensagem}}\" }\n}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "entrega-whatsapp",
+   "name": "Chatwoot — Entrega via WhatsApp",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2080,
+    380
+   ],
+   "continueOnFail": true,
+   "notes": "Mesmo mecanismo já usado em 'WhatsApp — Confirma Pagamento' logo acima — Chatwoot casa o contato pelo telefone sozinho."
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"inbox_id\": {{$env.CHATWOOT_EMAIL_INBOX_ID}},\n  \"meta\": { \"sender\": { \"email\": \"{{$json.email}}\" } },\n  \"message\": { \"content\": \"{{$json.mensagem}}\" }\n}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "entrega-email",
+   "name": "Chatwoot — Entrega via E-mail",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2080,
+    500
+   ],
+   "continueOnFail": true,
+   "notes": "Mesmo padrão do inbox de WhatsApp, só que no inbox de e-mail já configurado no Chatwoot (CHATWOOT_EMAIL_INBOX_ID, mesma convenção do CHATWOOT_WHATSAPP_INBOX_ID que já existe). Não é um serviço de e-mail novo."
+  },
+  {
+   "parameters": {
+    "jsCode": "// Cliente sem telefone e sem e-mail cadastrado — não tem canal pra entregar.\n// Registra a pendência de forma visível em vez de falhar silenciosamente;\n// não inventa um canal que não existe.\nreturn [{ json: { entregaPendente: true, motivo: 'Cliente sem telefone e sem e-mail cadastrado — sem canal disponível para entrega' } }];\n"
+   },
+   "id": "sem-canal",
+   "name": "Sem Canal Disponível",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2080,
+    620
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$node['Monta Entrega (canal + mensagem)'].json.invoiceName}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"custom_entrega_digital_status\": \"{{$json.entregaPendente ? 'pendente' : 'concluida'}}\"}",
+    "options": {},
+    "method": "PUT"
+   },
+   "id": "marca-entrega-concluida",
+   "name": "Ritmo — Registra Conclusão da Entrega",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2300,
+    500
+   ],
+   "continueOnFail": true
+  }
+ ],
+ "connections": {
+  "Webhook ERPNext — Fatura Criada": {
+   "main": [
+    [
+     {
+      "node": "Responde OK",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Extrai Dados da Fatura",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai Dados da Fatura": {
+   "main": [
+    [
+     {
+      "node": "InfinitePay — Gera Pix",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "InfinitePay — Gera Pix": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Salva Dados do Pix",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Normaliza Telefone (WhatsApp — Envia Pix)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Trigger Lembrete 23h": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Busca Pagamentos Pendentes",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "ERPNext — Busca Pagamentos Pendentes": {
+   "main": [
+    [
+     {
+      "node": "Tem Pagamentos Pendentes?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Split Pagamentos": {
+   "main": [
+    [
+     {
+      "node": "Verifica Idade do Pagamento",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Verifica Idade do Pagamento": {
+   "main": [
+    [
+     {
+      "node": "Deve Lembrar?",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Deve Cancelar?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Deve Lembrar?": {
+   "main": [
+    [
+     {
+      "node": "Normaliza Telefone (WhatsApp — Envia Lembrete)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "Deve Cancelar?": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Cancela Fatura",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "ERPNext — Cancela Fatura": {
+   "main": [
+    [
+     {
+      "node": "Normaliza Telefone (WhatsApp — Notifica Cancelamento)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Webhook InfinitePay — Pagamento": {
+   "main": [
+    [
+     {
+      "node": "Valida Assinatura InfinitePay",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Pagamento Aprovado?": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Baixa Fatura",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "ERPNext — Baixa Fatura": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Busca Dados da Fatura",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "ERPNext — Busca Dados da Fatura": {
+   "main": [
+    [
+     {
+      "node": "Normaliza Telefone (WhatsApp — Confirma Pagamento)",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Ritmo — Busca Recurso Digital dos Itens",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Tem Pagamentos Pendentes?": {
+   "main": [
+    [
+     {
+      "node": "Split Pagamentos",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Nenhum Pagamento Pendente (encerra limpo)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Normaliza Telefone (WhatsApp — Envia Pix)": {
+   "main": [
+    [
+     {
+      "node": "WhatsApp — Envia Pix",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Normaliza Telefone (WhatsApp — Envia Lembrete)": {
+   "main": [
+    [
+     {
+      "node": "WhatsApp — Envia Lembrete",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Normaliza Telefone (WhatsApp — Notifica Cancelamento)": {
+   "main": [
+    [
+     {
+      "node": "WhatsApp — Notifica Cancelamento",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Normaliza Telefone (WhatsApp — Confirma Pagamento)": {
+   "main": [
+    [
+     {
+      "node": "WhatsApp — Confirma Pagamento",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Valida Assinatura InfinitePay": {
+   "main": [
+    [
+     {
+      "node": "Assinatura Válida?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Assinatura Válida?": {
+   "main": [
+    [
+     {
+      "node": "Pagamento Aprovado?",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Rejeita (assinatura inválida)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Busca Recurso Digital dos Itens": {
+   "main": [
+    [
+     {
+      "node": "Monta Entrega (canal + mensagem)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Entrega (canal + mensagem)": {
+   "main": [
+    [
+     {
+      "node": "Tem Item Digital?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Tem Item Digital?": {
+   "main": [
+    [
+     {
+      "node": "Escolhe Canal (Chatwoot)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "Escolhe Canal (Chatwoot)": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Entrega via WhatsApp",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Chatwoot — Entrega via E-mail",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Sem Canal Disponível",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Entrega via WhatsApp": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Registra Conclusão da Entrega",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Entrega via E-mail": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Registra Conclusão da Entrega",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Sem Canal Disponível": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Registra Conclusão da Entrega",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}

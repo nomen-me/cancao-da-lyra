@@ -1,0 +1,361 @@
+{
+ "name": "Synapse W1 — Sincronização de Cadastros ERPNext ↔ Chatwoot",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "erpnext-customer",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-erpnext",
+   "name": "Webhook ERPNext — Cliente",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "text",
+    "responseBody": "ok",
+    "options": {}
+   },
+   "id": "respond",
+   "name": "Responde OK",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    460,
+    180
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst doc = body.doc || body;\n\nconst nome = doc.customer_name || '';\nconst email = doc.email_id || '';\nconst telefone_raw = (doc.mobile_no || '').replace(/\\D/g, '');\n\n// Garante formato +55XXXXXXXXXXX\nlet telefone = telefone_raw;\nif (telefone.startsWith('55') && telefone.length >= 12) {\n  telefone = '+' + telefone;\n} else if (telefone.length == 11 || telefone.length == 10) {\n  telefone = '+55' + telefone;\n} else if (telefone.length > 0) {\n  telefone = '+55' + telefone;\n}\n\nlet tag = 'cliente-novo';\nif (doc.total_billing_this_year > 5000) tag = 'cliente-vip';\nelse if (doc.orders_count > 3) tag = 'cliente-recorrente';\n\nreturn [{\n  json: { nome, email, telefone, tag, erpnext_id: doc.name }\n}];"
+   },
+   "id": "parse-customer",
+   "name": "Extrai e Formata Dados do Cliente",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/contacts/search?q={{$json.telefone}}&include_contacts=true",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "id": "search-by-phone",
+   "name": "Chatwoot — Busca por Telefone",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "number": [
+      {
+       "value1": "={{$json.meta.count}}",
+       "operation": "equal",
+       "value2": 0
+      }
+     ]
+    }
+   },
+   "id": "phone-found",
+   "name": "Não encontrou por Telefone?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/contacts/search?q={{$node['Extrai e Formata Dados do Cliente'].json.email}}&include_contacts=true",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "id": "search-by-email",
+   "name": "Chatwoot — Busca por Email (fallback)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1120,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "number": [
+      {
+       "value1": "={{$json.meta.count}}",
+       "operation": "equal",
+       "value2": 0
+      }
+     ]
+    }
+   },
+   "id": "email-found",
+   "name": "Não encontrou por Email?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1340,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/contacts",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"name\": \"{{$node['Extrai e Formata Dados do Cliente'].json.nome}}\",\n  \"email\": \"{{$node['Extrai e Formata Dados do Cliente'].json.email}}\",\n  \"phone_number\": \"{{$node['Extrai e Formata Dados do Cliente'].json.telefone}}\",\n  \"identifier\": \"{{$node['Extrai e Formata Dados do Cliente'].json.erpnext_id}}\",\n  \"custom_attributes\": { \"tag_cliente\": \"{{$node['Extrai e Formata Dados do Cliente'].json.tag}}\" }\n}",
+    "method": "POST"
+   },
+   "id": "create-contact",
+   "name": "Chatwoot — Cria Contacto Novo",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1560,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const input = $input.first().json;\nlet contact_id = null;\n\n// O input direto ($input) já é o resultado de quem realmente rodou nesse\n// caminho — telefone OU e-mail, dependendo de qual branch trouxe a execução\n// até aqui. Ler por $input evita depender de $node[] pra um nó que pode\n// não ter sido executado nesse ramo.\nif (input?.meta?.count > 0 && input?.payload?.[0]?.id) {\n  contact_id = input.payload[0].id;\n} else {\n  try {\n    const emailNode = $node[\"Chatwoot — Busca por Email (fallback)\"];\n    if (emailNode && emailNode.json?.meta?.count > 0) {\n      contact_id = emailNode.json.payload[0].id;\n    }\n  } catch (e) {}\n}\n\nreturn [{ json: { contact_id } }];\n"
+   },
+   "id": "resolve-id",
+   "name": "Resolve ID do Contacto Existente",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1560,
+    320
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/contacts/{{$json.contact_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"name\": \"{{$node['Extrai e Formata Dados do Cliente'].json.nome}}\",\n  \"email\": \"{{$node['Extrai e Formata Dados do Cliente'].json.email}}\",\n  \"phone_number\": \"{{$node['Extrai e Formata Dados do Cliente'].json.telefone}}\",\n  \"identifier\": \"{{$node['Extrai e Formata Dados do Cliente'].json.erpnext_id}}\",\n  \"custom_attributes\": { \"tag_cliente\": \"{{$node['Extrai e Formata Dados do Cliente'].json.tag}}\" }\n}",
+    "method": "PATCH"
+   },
+   "id": "update-contact",
+   "name": "Chatwoot — Actualiza Contacto",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1780,
+    320
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Customer/{{$node['Extrai e Formata Dados do Cliente'].json.erpnext_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"custom_chatwoot_synced\": \"1\", \"custom_chatwoot_tag\": \"{{$node['Extrai e Formata Dados do Cliente'].json.tag}}\"}",
+    "method": "PUT"
+   },
+   "id": "update-erpnext",
+   "name": "ERPNext — Marca Sincronizado",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2000,
+    300
+   ],
+   "notes": "IMPORTANTE (config no ERPNext, não no n8n): o Webhook de saída do Customer precisa da condição doc.custom_chatwoot_synced != 1, senão esta própria gravação reaciona o webhook e cria um loop infinito."
+  }
+ ],
+ "connections": {
+  "Webhook ERPNext — Cliente": {
+   "main": [
+    [
+     {
+      "node": "Responde OK",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Extrai e Formata Dados do Cliente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai e Formata Dados do Cliente": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Busca por Telefone",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Busca por Telefone": {
+   "main": [
+    [
+     {
+      "node": "Não encontrou por Telefone?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Não encontrou por Telefone?": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Busca por Email (fallback)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Resolve ID do Contacto Existente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Busca por Email (fallback)": {
+   "main": [
+    [
+     {
+      "node": "Não encontrou por Email?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Não encontrou por Email?": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Cria Contacto Novo",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Resolve ID do Contacto Existente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Cria Contacto Novo": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Marca Sincronizado",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Resolve ID do Contacto Existente": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Actualiza Contacto",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Actualiza Contacto": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Marca Sincronizado",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}

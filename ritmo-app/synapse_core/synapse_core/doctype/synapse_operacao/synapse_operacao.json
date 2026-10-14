@@ -1,0 +1,141 @@
+{
+ "doctype": "DocType",
+ "name": "Synapse Operacao",
+ "module": "Synapse Core",
+ "custom": 0,
+ "engine": "InnoDB",
+ "issingle": 0,
+ "fields": [
+  {
+   "fieldname": "operation_id",
+   "fieldtype": "Data",
+   "label": "Operation ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "action",
+   "fieldtype": "Data",
+   "label": "Action",
+   "reqd": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "reqd": 1,
+   "search_index": 1,
+   "options": "RECEIVED\nHOLD\nAWAITING_APPROVAL\nREJECTED\nEXECUTED\nCONCURRENCY_CONFLICT\nCONTEXT_CHANGED\nINTENT_EXPIRED\nUNAUTHORIZED\nFAILED"
+  },
+  {
+   "fieldname": "entity_type",
+   "fieldtype": "Data",
+   "label": "Entity Type"
+  },
+  {
+   "fieldname": "entity_id",
+   "fieldtype": "Data",
+   "label": "Entity ID"
+  },
+  {
+   "fieldname": "decision_state_version",
+   "fieldtype": "Int",
+   "label": "decision_state_version"
+  },
+  {
+   "fieldname": "origin_actor",
+   "fieldtype": "Select",
+   "label": "Origin Actor",
+   "options": "HUMAN\nLYRA\nSYSTEM"
+  },
+  {
+   "fieldname": "requested_by",
+   "fieldtype": "Data",
+   "label": "Requested By"
+  },
+  {
+   "fieldname": "intent_created_at",
+   "fieldtype": "Datetime",
+   "label": "Intent Created At",
+   "precision": "6"
+  },
+  {
+   "fieldname": "intent_ttl",
+   "fieldtype": "Int",
+   "label": "Intent TTL (s)"
+  },
+  {
+   "fieldname": "intent_expires_at",
+   "fieldtype": "Datetime",
+   "label": "Intent Expires At",
+   "precision": "6"
+  },
+  {
+   "fieldname": "hold_created_at",
+   "fieldtype": "Datetime",
+   "label": "Hold Created At",
+   "precision": "6"
+  },
+  {
+   "fieldname": "approval_required",
+   "fieldtype": "Check",
+   "label": "Approval Required",
+   "default": "0"
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Data",
+   "label": "Approved By"
+  },
+  {
+   "fieldname": "approved_at",
+   "fieldtype": "Datetime",
+   "label": "Approved At"
+  },
+  {
+   "fieldname": "payload",
+   "fieldtype": "Code",
+   "label": "Payload",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "result",
+   "fieldtype": "Code",
+   "label": "Result",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "error",
+   "fieldtype": "Small Text",
+   "label": "Error"
+  },
+  {
+   "fieldname": "executed_at",
+   "fieldtype": "Datetime",
+   "label": "Executed At"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 0,
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1
+  },
+  {
+   "role": "Synapse Automacao",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1
+  }
+ ],
+ "autoname": "field:operation_id",
+ "naming_rule": "By fieldname"
+}

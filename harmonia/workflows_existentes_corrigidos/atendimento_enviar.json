@@ -1,0 +1,120 @@
+{
+ "name": "Synapse — Atendimento — Enviar Mensagem",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "atendimento/enviar",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-atend-enviar",
+   "name": "Webhook — Enviar Mensagem",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations/{{$json.conversa_id}}/messages",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({ content: $json.mensagem, message_type: 'outgoing' })}}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "envia-msg-cw",
+   "name": "Chatwoot — Envia Mensagem",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    460,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "message_type=outgoing é o que faz o Chatwoot tratar como resposta do atendente (e não reabrir o loop da Lyra, que só reage a 'incoming')."
+  },
+  {
+   "parameters": {
+    "jsCode": "const input = $input.first().json;\nconst sucesso = !input.error && !!(input.data?.id || input.id);\nreturn [{ json: { sucesso, erro: sucesso ? null : 'Não foi possível enviar a mensagem agora' } }];"
+   },
+   "id": "formata-resposta-enviar",
+   "name": "Formata Resposta pro Painel",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-enviar",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    900,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Enviar Mensagem": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Envia Mensagem",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Envia Mensagem": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pro Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pro Painel": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

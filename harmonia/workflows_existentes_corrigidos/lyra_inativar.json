@@ -1,0 +1,116 @@
+{
+ "name": "Synapse — Lyra Interna — Inativar Registro",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "lyra/inativar",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-lyra-inativar",
+   "name": "Webhook — Inativar Registro",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "// Reaproveita 100% o gerenciar_cadastro que já existe no\n// lyra-l2-consulta — inativar é só um 'editar' com payload fixo\n// {disabled: 1}. Não existe lógica nova aqui, só a tradução do\n// formato que o painel manda pro formato que o L2 já entende.\nreturn [{\n  json: {\n    funcao: 'gerenciar_cadastro',\n    argumentos: {\n      acao: 'editar',\n      tipo_entidade: $json.tipo,\n      id_entidade: $json.id,\n      dados_cliente: { disabled: 1 }\n    },\n    conversa_id: null,\n    tenant_id: null\n  }\n}];\n"
+   },
+   "id": "monta-chamada-l2",
+   "name": "Monta Chamada pro L2 (gerenciar_cadastro)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.HARMONIA_DOMAIN}}/webhook/lyra-l2-consulta",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify($json)}}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "chama-l2",
+   "name": "Chama L2 — gerenciar_cadastro (editar)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "Mesmo padrão que o próprio Lyra_L1_triagem já usa pra chamar L2/L3 — reuso real, não HTTP inventado."
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{ { sucesso: $json.sucesso === true, erro: $json.erro || null } }}",
+    "options": {}
+   },
+   "id": "responde-lyra-inativar",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    900,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Inativar Registro": {
+   "main": [
+    [
+     {
+      "node": "Monta Chamada pro L2 (gerenciar_cadastro)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Chamada pro L2 (gerenciar_cadastro)": {
+   "main": [
+    [
+     {
+      "node": "Chama L2 — gerenciar_cadastro (editar)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chama L2 — gerenciar_cadastro (editar)": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

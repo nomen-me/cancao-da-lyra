@@ -1,0 +1,122 @@
+{
+ "name": "Synapse — Atendimento — Listar Conversas",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "atendimento/conversas",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-atend-conversas",
+   "name": "Webhook — Listar Conversas",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      }
+     ]
+    },
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "status",
+       "value": "={{$json.status || 'open'}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-conversas-cw",
+   "name": "Chatwoot — Lista Conversas",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    460,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "status=open por padrão — conversas resolvidas não aparecem na fila de atendimento. O Painel pode mandar status diferente na query se quiser outra aba (ex: resolvidas)."
+  },
+  {
+   "parameters": {
+    "jsCode": "const input = $input.first().json;\nconst lista = input.data?.payload || input.payload || [];\n\nconst CANAL_POR_TIPO = {\n  'Channel::Whatsapp': 'whatsapp',\n  'Channel::FacebookPage': 'facebook',\n  'Channel::Instagram': 'instagram',\n  'Channel::WebWidget': 'website',\n  'Channel::Telegram': 'telegram',\n  'Channel::Sms': 'sms'\n};\n\nconst conversas = lista.map(c => {\n  const ultimaMsg = (c.messages || [])[c.messages.length - 1];\n  return {\n    id: c.id,\n    nome: c.meta?.sender?.name || 'Sem nome',\n    canal: CANAL_POR_TIPO[c.meta?.channel] || CANAL_POR_TIPO[c.inbox?.channel_type] || 'outro',\n    ultima_mensagem: ultimaMsg?.content || '',\n    nao_lida: (c.unread_count || 0) > 0,\n    status: c.status,\n    atualizado_em: c.timestamp || c.last_activity_at || null\n  };\n});\n\n// Mais recente primeiro — o Chatwoot já costuma devolver assim, mas não\n// custa garantir em vez de confiar na ordem que veio.\nconversas.sort((a, b) => (b.atualizado_em || 0) - (a.atualizado_em || 0));\n\nreturn [{ json: { conversas } }];"
+   },
+   "id": "formata-conversas",
+   "name": "Formata Resposta pro Painel",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-conversas",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    900,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Listar Conversas": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Lista Conversas",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Lista Conversas": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pro Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pro Painel": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

@@ -1,0 +1,203 @@
+{
+ "name": "Synapse — Lyra Interna — Alterar Registro",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "lyra/alterar",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-lyra-alterar",
+   "name": "Webhook — Alterar Registro",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "// A ÚNICA coisa que não existe em lugar nenhum ainda é traduzir uma\n// instrução em português livre pra um diff estruturado de campos.\n// A gravação em si (depois de estruturado) é 100% o gerenciar_cadastro\n// que já existe no L2 — não duplicamos essa parte.\nconst referencia = \\\"Campos válidos por tipo_entidade (ERPNext):\\ncliente (Customer): customer_name, mobile_no, email_id, tax_id, customer_group\\nproduto (Item): item_name, standard_rate (preco), description, item_group\\nfornecedor (Supplier): supplier_name, mobile_no, email_id, tax_id, supplier_group\\\";\n\nconst system_prompt = 'Você traduz uma instrução em português pra um JSON de '\n  + 'campos a atualizar num ERP. Responda APENAS com um objeto JSON plano '\n  + '{\"campo\": valor, ...}, só com os campos que a instrução realmente pede '\n  + 'pra mudar, usando exatamente os nomes de campo da referência abaixo. '\n  + 'Não invente campo fora da lista. Se a instrução não corresponder a nenhum '\n  + 'campo conhecido, responda {}.\\\\n\\\\n' + referencia;\n\nconst user_prompt = 'tipo_entidade: ' + $json.tipo + '\\\\ninstrução: ' + $json.instrucao;\n\nreturn [{ json: { ...$json, modelo: 'gemini-2.0-flash', system_prompt, user_prompt } }];\n"
+   },
+   "id": "monta-prompt-alterar",
+   "name": "Monta Prompt de Interpretação",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$json.modelo}}:generateContent?key={{$env.GEMINI_API_KEY}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"system_instruction\": { \"parts\": [{ \"text\": \"{{$json.system_prompt}}\" }] },\n  \"contents\": [{ \"role\": \"user\", \"parts\": [{ \"text\": \"{{$json.user_prompt}}\" }] }],\n  \"generationConfig\": { \"response_mime_type\": \"application/json\" }\n}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "gemini-interpreta",
+   "name": "Gemini Flash — Interpreta Instrução",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "Mesmo provedor/modelo já usado no Lyra_L1_triagem (Gemini Flash) — não introduz um segundo provedor de IA."
+  },
+  {
+   "parameters": {
+    "jsCode": "const meta = $node['Monta Prompt de Interpretação'].json;\nconst resp = $input.first().json;\n\nlet diff = {};\ntry {\n  const texto = resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  diff = JSON.parse(texto);\n} catch(e) {\n  throw new Error('Lyra não conseguiu interpretar a instrução');\n}\n\nif (!Object.keys(diff).length) {\n  throw new Error('Nenhum campo reconhecido nessa instrução');\n}\n\nreturn [{\n  json: {\n    funcao: 'gerenciar_cadastro',\n    argumentos: {\n      acao: 'editar',\n      tipo_entidade: meta.tipo,\n      id_entidade: meta.id,\n      dados_cliente: diff\n    },\n    _resumo_campos: Object.keys(diff).join(', ')\n  }\n}];\n"
+   },
+   "id": "extrai-diff",
+   "name": "Extrai Diff Estruturado",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.HARMONIA_DOMAIN}}/webhook/lyra-l2-consulta",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({ funcao: $json.funcao, argumentos: $json.argumentos })}}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "chama-l2-alterar",
+   "name": "Chama L2 — gerenciar_cadastro (editar)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1120,
+    300
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "const meta = $node['Extrai Diff Estruturado'].json;\nconst resultadoL2 = $input.first().json;\n\nif (!resultadoL2.sucesso) {\n  return [{ json: { erro: resultadoL2.erro || 'Não foi possível salvar a alteração' } }];\n}\n\nreturn [{ json: { resumo: 'Campos atualizados: ' + meta._resumo_campos } }];\n"
+   },
+   "id": "formata-resposta-alterar",
+   "name": "Formata Resposta pro Painel",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1340,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-lyra-alterar",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1560,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Alterar Registro": {
+   "main": [
+    [
+     {
+      "node": "Monta Prompt de Interpretação",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Prompt de Interpretação": {
+   "main": [
+    [
+     {
+      "node": "Gemini Flash — Interpreta Instrução",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Gemini Flash — Interpreta Instrução": {
+   "main": [
+    [
+     {
+      "node": "Extrai Diff Estruturado",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai Diff Estruturado": {
+   "main": [
+    [
+     {
+      "node": "Chama L2 — gerenciar_cadastro (editar)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chama L2 — gerenciar_cadastro (editar)": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pro Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pro Painel": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

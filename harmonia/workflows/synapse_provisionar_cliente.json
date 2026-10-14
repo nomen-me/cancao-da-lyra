@@ -1,0 +1,277 @@
+{
+ "name": "Synapse — Provisionar Cliente (Semaphore)",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "synapse-provisionar-cliente",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "p01",
+   "name": "Webhook — Provisionar/Validar Cliente",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    200,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "// Contrato n8n -> Semaphore (Integration). Funcao pura: mesma fonte do nó Code do workflow e dos testes.\n// Parametros enviados ao Semaphore = EXATAMENTE os consumidos pelos playbooks: vps_ip, dominio, nome_loja.\nconst OPERACOES = ['provisionar', 'validar'];\nconst RE_IPV4 = /^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$/;\nconst RE_FQDN = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$/;\n\nfunction autenticar(headers, esperado) {\n  const h = headers || {};\n  const recebido = h['x-synapse-provision-token'];\n  if (!esperado) return { ok: false, status: 500, reason: 'SYNAPSE_PROVISION_TOKEN nao configurado no Harmonia' };\n  if (!recebido || recebido !== esperado) return { ok: false, status: 401, reason: 'token invalido' };\n  return { ok: true };\n}\n\nfunction validarContrato(body) {\n  const b = body || {};\n  if (!OPERACOES.includes(b.operacao)) return { ok: false, status: 400, reason: 'operacao deve ser provisionar|validar' };\n  if (typeof b.vps_ip !== 'string' || !RE_IPV4.test(b.vps_ip)) return { ok: false, status: 400, reason: 'vps_ip invalido (IPv4)' };\n  const dominio = typeof b.dominio === 'string' ? b.dominio.trim().toLowerCase() : '';\n  if (!RE_FQDN.test(dominio)) return { ok: false, status: 400, reason: 'dominio invalido (FQDN)' };\n  let nome = typeof b.nome_loja === 'string' ? b.nome_loja.trim() : '';\n  if (!nome) nome = dominio;\n  if (nome.length > 120 || /[\\u0000-\\u001f\"\\\\$`]/.test(nome)) return { ok: false, status: 400, reason: 'nome_loja invalido' };\n  return { ok: true, operacao: b.operacao, payload: { vps_ip: b.vps_ip, dominio, nome_loja: nome } };\n}\n\n\n\nconst esperado = $env.SYNAPSE_PROVISION_TOKEN;\nconst a = autenticar($json.headers, esperado);\nif (!a.ok) return [{ json: { ok: false, status: a.status, reason: a.reason } }];\nconst v = validarContrato($json.body);\nif (!v.ok) return [{ json: { ok: false, status: v.status, reason: v.reason } }];\nconst path = v.operacao === 'provisionar' ? $env.SEMAPHORE_INTEGRACAO_PROVISIONAR_PATH : $env.SEMAPHORE_INTEGRACAO_VALIDAR_PATH;\nif (!path || !$env.SEMAPHORE_INTEGRACAO_TOKEN || !$env.SEMAPHORE_INTERNAL_URL) return [{ json: { ok: false, status: 500, reason: 'integracao Semaphore nao configurada no Harmonia' } }];\nreturn [{ json: { ok: true, operacao: v.operacao, payload: v.payload, url: $env.SEMAPHORE_INTERNAL_URL + path, header: $env.SEMAPHORE_INTEGRACAO_HEADER || 'X-Synapse-Token' } }];"
+   },
+   "id": "p02",
+   "name": "Autentica e Valida o Contrato",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    440,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.ok}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "p03",
+   "name": "Contrato OK?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "={{$json.url}}",
+    "method": "POST",
+    "sendHeaders": true,
+    "specifyHeaders": "json",
+    "jsonHeaders": "={{JSON.stringify({'Content-Type':'application/json', [$json.header]: $env.SEMAPHORE_INTEGRACAO_TOKEN})}}",
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify($json.payload)}}",
+    "options": {
+     "timeout": 30000,
+     "response": {
+      "response": {
+       "neverError": true,
+       "fullResponse": true
+      }
+     }
+    }
+   },
+   "id": "p04",
+   "name": "Semaphore — Dispara Integration (API oficial)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    920,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst prev = $node['Autentica e Valida o Contrato'].json;\nconst st = $input.first().json.statusCode;\nif (st < 200 || st >= 300) throw new Error('Semaphore recusou a Integration (HTTP ' + st + ')');\nreturn [{ json: { accepted: true, operacao: prev.operacao, dominio: prev.payload.dominio, vps_ip: prev.payload.vps_ip } }];"
+   },
+   "id": "p05",
+   "name": "Resposta 202 (task enfileirada no Semaphore)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1160,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 202
+    }
+   },
+   "id": "p06",
+   "name": "Responde 202",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1400,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "return [{ json: { accepted: false, status: $json.status, reason: $json.reason } }];"
+   },
+   "id": "p07",
+   "name": "Status de erro (401/400/500)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    920,
+    420
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "number": [
+      {
+       "value1": "={{$json.status}}",
+       "operation": "equal",
+       "value2": 401
+      }
+     ]
+    }
+   },
+   "id": "p08",
+   "name": "Erro é autenticação?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1160,
+    420
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 401
+    }
+   },
+   "id": "p09",
+   "name": "Responde 401",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1400,
+    340
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 400
+    }
+   },
+   "id": "p10",
+   "name": "Responde 400",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1400,
+    500
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Provisionar/Validar Cliente": {
+   "main": [
+    [
+     {
+      "node": "Autentica e Valida o Contrato",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Autentica e Valida o Contrato": {
+   "main": [
+    [
+     {
+      "node": "Contrato OK?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Contrato OK?": {
+   "main": [
+    [
+     {
+      "node": "Semaphore — Dispara Integration (API oficial)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Status de erro (401/400/500)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Semaphore — Dispara Integration (API oficial)": {
+   "main": [
+    [
+     {
+      "node": "Resposta 202 (task enfileirada no Semaphore)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Resposta 202 (task enfileirada no Semaphore)": {
+   "main": [
+    [
+     {
+      "node": "Responde 202",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Status de erro (401/400/500)": {
+   "main": [
+    [
+     {
+      "node": "Erro é autenticação?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Erro é autenticação?": {
+   "main": [
+    [
+     {
+      "node": "Responde 401",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Responde 400",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

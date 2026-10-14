@@ -1,0 +1,504 @@
+{
+ "name": "Lyra — L3 — Automação Avançada & Ações de Alto Impacto",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "lyra-l3-acao",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-l3",
+   "name": "Webhook — Chamada de Função (L1 → L3)",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const { funcao, argumentos = {} } = $json;\nlet metodo = 'POST', path = '', body = {};\n\nif (funcao === 'processar_pedido') {\n  const acao = argumentos.acao;\n  if (acao === 'criar_venda') {\n    metodo = 'POST';\n    path = '/api/resource/Sales Order';\n    body = { items: (argumentos.itens || []).map(i => ({\n      item_code: i.produto_id, qty: i.quantidade, rate: i.preco_unitario\n    })) };\n  } else if (acao === 'confirmar') {\n    if (!argumentos.id_pedido) throw new Error('id_pedido é obrigatório para confirmar');\n    metodo = 'PUT';\n    path = `/api/resource/Sales Order/${encodeURIComponent(argumentos.id_pedido)}`;\n    body = { status: 'To Deliver and Bill' };\n  } else if (acao === 'cancelar' || acao === 'estornar') {\n    // Não é um PUT simples — cancelamento de pedido no Brasil tem regra\n    // fiscal (janela de 24h da NF-e) e efeito colateral de estoque/\n    // pagamento. Isso é resolvido no branch dedicado logo abaixo, não\n    // aqui — só valida o que é obrigatório e segue.\n    if (!argumentos.id_pedido) throw new Error('id_pedido é obrigatório para ' + acao);\n    if (!argumentos.motivo) throw new Error('motivo é obrigatório para ' + acao + ' (auditoria)');\n  } else {\n    throw new Error('acao inválida para processar_pedido: ' + acao);\n  }\n} else if (funcao === 'faturamento_expedicao') {\n  if (!argumentos.id_pedido) throw new Error('id_pedido é obrigatório para faturamento_expedicao');\n  metodo = 'POST';\n  path = '/api/method/erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice';\n  body = { source_name: argumentos.id_pedido };\n} else {\n  throw new Error('Função desconhecida: ' + funcao);\n}\n\nreturn [{ json: { funcao, acao: argumentos.acao, id_pedido: argumentos.id_pedido, motivo: argumentos.motivo, metodo, path, body, conversa_id: $json.conversa_id, tenant_id: $json.tenant_id } }];\n"
+   },
+   "id": "prepara-acao",
+   "name": "Prepara Ação de Alto Impacto",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}{{$json.path}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify($json.body)}}",
+    "options": {},
+    "method": "={{$json.metodo}}"
+   },
+   "id": "ritmo-acao",
+   "name": "Ritmo — Executa Ação",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "const input = $input.first().json;\nconst meta = $node['Prepara Ação de Alto Impacto'].json;\n\nconst sucesso = !input.error;\nconst dados = input.data !== undefined ? input.data : (input.message !== undefined ? input.message : (input.error ? null : input));\n\nreturn [{\n  json: {\n    conversa_id: meta.conversa_id,\n    tenant_id: meta.tenant_id,\n    funcao: meta.funcao,\n    sucesso,\n    dados,\n    erro: input.error || null,\n    aviso: (sucesso && meta.funcao === 'faturamento_expedicao')\n      ? 'Fatura gerada como rascunho — submissão final (emissão de NF-e) exige confirmação separada, ainda não automatizada.'\n      : null\n  }\n}];\n"
+   },
+   "id": "formata-resposta-l3",
+   "name": "Formata Resposta pra Lyra",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-l1-l3",
+   "name": "Responde ao L1",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1120,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.acao === 'cancelar' || $json.acao === 'estornar'}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "roteia-cancelamento",
+   "name": "É Cancelar/Estornar?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    680,
+    460
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$json.id_pedido}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-fatura-cancelamento",
+   "name": "Ritmo — Busca Fatura Completa",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    400
+   ],
+   "continueOnFail": true,
+   "notes": "'Pedido', no vocabulário deste sistema, é a Sales Invoice (mesmo padrão de consultar_pedido no L2 e do W2/W3) — não Sales Order."
+  },
+  {
+   "parameters": {
+    "jsCode": "const meta = $node['Prepara Ação de Alto Impacto'].json;\nconst resp = $input.first().json;\nif (resp.error || !resp.data) {\n  throw new Error('Não foi possível localizar o pedido ' + meta.id_pedido + ' para ' + meta.acao);\n}\nconst invoice = resp.data;\n\n// custom_nfe_autorizada_em: campo do app de localização brasileira do Ritmo\n// que guarda o instante em que a NF-e foi autorizada pela SEFAZ. Ajustar o\n// nome exato conforme o app fiscal realmente instalado (não confirmado).\nconst autorizadaEm = invoice.custom_nfe_autorizada_em ? new Date(invoice.custom_nfe_autorizada_em) : null;\nconst horasDesdeAutorizacao = autorizadaEm ? (Date.now() - autorizadaEm.getTime()) / 3600000 : null;\nconst dentro24h = autorizadaEm !== null && horasDesdeAutorizacao < 24;\n\nconst itensEspelhados = (invoice.items || []).map(i => ({\n  item_code: i.item_code, qty: -Math.abs(i.qty), rate: i.rate\n}));\n\nreturn [{\n  json: {\n    ...meta,\n    invoiceName: invoice.name,\n    dentro24h,\n    itensEspelhados,\n    infinitepayReferencia: invoice.custom_infinitepay_transaction_nsu || null\n  }\n}];\n"
+   },
+   "id": "decide-janela-nfe",
+   "name": "Decide Janela de 24h da NF-e",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1120,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.dentro24h}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "dentro-24h",
+   "name": "Dentro de 24h da Autorização?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1340,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$json.invoiceName}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"docstatus\": 2, \"custom_motivo_cancelamento\": \"{{$json.motivo}}\"}",
+    "options": {},
+    "method": "PUT"
+   },
+   "id": "cancela-fatura-ritmo",
+   "name": "Ritmo — Cancela Sales Invoice",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1780,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "docstatus:2 é o cancelamento real do documento no Frappe (não um campo de status solto) — reverte estoque e lançamentos contábeis sozinho, nativo do ERPNext. Não precisa (e não deve) repor estoque na mão."
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({ is_return: 1, return_against: $json.invoiceName, items: $json.itensEspelhados, custom_motivo_cancelamento: $json.motivo })}}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "cria-devolucao",
+   "name": "Ritmo — Cria Nota de Devolução (> 24h)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1560,
+    500
+   ],
+   "continueOnFail": true,
+   "notes": "is_return:1 é o mecanismo nativo do ERPNext pra devolução — reverte estoque sozinho, nos mesmos moldes de um cancelamento. Não modela reposição manual."
+  },
+  {
+   "parameters": {
+    "jsCode": "const meta = $node['Decide Janela de 24h da NF-e'].json;\nconst resultado = $input.first().json;\n\nconst sucesso = !resultado.error;\nconst tipo = meta.dentro24h ? 'cancelamento_nfe' : 'nota_devolucao';\n\nreturn [{\n  json: {\n    conversa_id: meta.conversa_id,\n    tenant_id: meta.tenant_id,\n    funcao: 'processar_pedido',\n    sucesso,\n    dados: sucesso ? { tipo, id_pedido: meta.invoiceName } : null,\n    erro: sucesso ? null : (resultado.error || 'Falha ao processar ' + meta.acao),\n    aviso: tipo === 'nota_devolucao'\n      ? 'Fora da janela de 24h da NF-e — foi emitida nota de devolução em vez de cancelamento.'\n      : null\n  }\n}];\n"
+   },
+   "id": "formata-resposta-cancelamento",
+   "name": "Formata Resposta — Cancelamento/Estorno",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2220,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Synapse Credencial Externa/infinitepay",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-credencial-infinitepay",
+   "name": "Ritmo — Busca Credencial InfinitePay do Lojista",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2000,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "Credencial do próprio lojista (Synapse Credencial Externa), não uma chave central da Synapse — mesma régua já fechada pra Melhor Envio."
+  },
+  {
+   "parameters": {
+    "jsCode": "// INTEGRAÇÃO PENDENTE DE CONFIRMAÇÃO — proposital.\n// Não existe endpoint real confirmado pra isso ainda, e um palpite\n// aqui poderia rodar em produção sem ninguém perceber que é chute.\n// Por isso este nó não faz chamada nenhuma — só encerra o caminho\n// com um erro claro. Quando a integração for confirmada, troque\n// ESTE nó por um HTTP Request real apontando pro endpoint certo;\n// o resto do workflow (busca de fatura, janela de 24h, criação da\n// devolução, cancelamento da fatura, busca de credencial) já está\n// pronto e não muda.\nconst meta = $node['Decide Janela de 24h da NF-e'].json;\nreturn [{\n  json: {\n    conversa_id: meta.conversa_id,\n    tenant_id: meta.tenant_id,\n    funcao: 'processar_pedido',\n    sucesso: false,\n    dados: null,\n    erro: 'Integração pendente: endpoint de cancelamento de NF-e do Ritmo ainda não confirmado (depende de qual app fiscal está instalado)',\n    etapa_pendente: 'cancelamento_nfe'\n  }\n}];\n"
+   },
+   "id": "cancela-nfe-ritmo",
+   "name": "Ritmo — Cancela NF-e (PENDENTE)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1560,
+    300
+   ],
+   "notes": "Encerra o caminho com erro controlado — não chama nenhum endpoint adivinhado. Ver comentário no código."
+  },
+  {
+   "parameters": {
+    "jsCode": "// INTEGRAÇÃO PENDENTE DE CONFIRMAÇÃO — proposital.\n// Não existe endpoint real confirmado pra isso ainda, e um palpite\n// aqui poderia rodar em produção sem ninguém perceber que é chute.\n// Por isso este nó não faz chamada nenhuma — só encerra o caminho\n// com um erro claro. Quando a integração for confirmada, troque\n// ESTE nó por um HTTP Request real apontando pro endpoint certo;\n// o resto do workflow (busca de fatura, janela de 24h, criação da\n// devolução, cancelamento da fatura, busca de credencial) já está\n// pronto e não muda.\nconst meta = $node['Decide Janela de 24h da NF-e'].json;\nreturn [{\n  json: {\n    conversa_id: meta.conversa_id,\n    tenant_id: meta.tenant_id,\n    funcao: 'processar_pedido',\n    sucesso: false,\n    dados: null,\n    erro: 'Integração pendente: endpoint de emissão de NF-e de devolução do Ritmo ainda não confirmado',\n    etapa_pendente: 'emissao_nfe_devolucao'\n  }\n}];\n"
+   },
+   "id": "emite-nfe-devolucao",
+   "name": "Ritmo — Emite NF-e de Devolução (PENDENTE)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1560,
+    500
+   ],
+   "notes": "Encerra o caminho com erro controlado — não chama nenhum endpoint adivinhado. Ver comentário no código."
+  },
+  {
+   "parameters": {
+    "jsCode": "// INTEGRAÇÃO PENDENTE DE CONFIRMAÇÃO — proposital.\n// Não existe endpoint real confirmado pra isso ainda, e um palpite\n// aqui poderia rodar em produção sem ninguém perceber que é chute.\n// Por isso este nó não faz chamada nenhuma — só encerra o caminho\n// com um erro claro. Quando a integração for confirmada, troque\n// ESTE nó por um HTTP Request real apontando pro endpoint certo;\n// o resto do workflow (busca de fatura, janela de 24h, criação da\n// devolução, cancelamento da fatura, busca de credencial) já está\n// pronto e não muda.\nconst meta = $node['Decide Janela de 24h da NF-e'].json;\nreturn [{\n  json: {\n    conversa_id: meta.conversa_id,\n    tenant_id: meta.tenant_id,\n    funcao: 'processar_pedido',\n    sucesso: false,\n    dados: null,\n    erro: 'Integração pendente: autenticação por lojista da InfinitePay ainda não confirmada (aguardando resposta sobre per-merchant no /v2/charges)',\n    etapa_pendente: 'estorno_infinitepay'\n  }\n}];\n"
+   },
+   "id": "estorna-infinitepay",
+   "name": "InfinitePay — Estorna Pagamento (PENDENTE)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1780,
+    400
+   ],
+   "notes": "Encerra o caminho com erro controlado — não chama nenhum endpoint adivinhado. Ver comentário no código."
+  }
+ ],
+ "connections": {
+  "Webhook — Chamada de Função (L1 → L3)": {
+   "main": [
+    [
+     {
+      "node": "Prepara Ação de Alto Impacto",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Prepara Ação de Alto Impacto": {
+   "main": [
+    [
+     {
+      "node": "É Cancelar/Estornar?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Executa Ação": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pra Lyra",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pra Lyra": {
+   "main": [
+    [
+     {
+      "node": "Responde ao L1",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "É Cancelar/Estornar?": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Busca Fatura Completa",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Ritmo — Executa Ação",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Busca Fatura Completa": {
+   "main": [
+    [
+     {
+      "node": "Decide Janela de 24h da NF-e",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Decide Janela de 24h da NF-e": {
+   "main": [
+    [
+     {
+      "node": "Dentro de 24h da Autorização?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Dentro de 24h da Autorização?": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Cancela NF-e (PENDENTE)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Ritmo — Emite NF-e de Devolução (PENDENTE)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Cancela NF-e (PENDENTE)": {
+   "main": [
+    [
+     {
+      "node": "Responde ao L1",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Cancela Sales Invoice": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Busca Credencial InfinitePay do Lojista",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Cria Nota de Devolução (> 24h)": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Emite NF-e de Devolução (PENDENTE)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Emite NF-e de Devolução (PENDENTE)": {
+   "main": [
+    [
+     {
+      "node": "Responde ao L1",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "InfinitePay — Estorna Pagamento (PENDENTE)": {
+   "main": [
+    [
+     {
+      "node": "Responde ao L1",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta — Cancelamento/Estorno": {
+   "main": [
+    [
+     {
+      "node": "Responde ao L1",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Busca Credencial InfinitePay do Lojista": {
+   "main": [
+    [
+     {
+      "node": "InfinitePay — Estorna Pagamento (PENDENTE)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

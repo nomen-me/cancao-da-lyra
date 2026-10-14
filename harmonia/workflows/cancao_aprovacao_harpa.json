@@ -1,0 +1,145 @@
+{
+ "name": "Synapse — Canção — Aprovação Humana (Harpa)",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "synapse-aprovar",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "n201",
+   "name": "Webhook — Aprovação Humana (Harpa/Painel)",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    200,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst b = $json.body || {};\nconst cred = $json.headers && $json.headers['x-approver-token'];   // \"chave:segredo\" do PROPRIO usuario aprovador no Ritmo\nif (!b.operation_id || !['approve','reject'].includes(b.decision)) throw new Error('operation_id e decision (approve|reject) sao obrigatorios');\nif (!cred) throw new Error('X-Approver-Token ausente: a aprovacao exige a identidade do operador humano');\nreturn [{ json: { operation_id: b.operation_id, decision: b.decision, reason: b.reason || null, cred } }];"
+   },
+   "id": "n202",
+   "name": "Valida pedido e credencial do aprovador",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    440,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.{{$json.decision}}",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$json.cred}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({operation_id: $json.operation_id, reason: $json.reason})}}",
+    "options": {}
+   },
+   "id": "n203",
+   "name": "Ritmo — Aprova/Rejeita (revalida na camada de execução)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    200
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst r = $input.first().json;\nconst m = r.message || {};\nconst s = m.status;\nconst msg = s === 'context_changed' ? 'Aprovação obsoleta: o contexto mudou. Nada foi executado. Revise e solicite nova decisão.'\n  : s === 'intent_expired' ? 'Aprovação expirada (TTL). Nada foi executado.'\n  : s === 'executed' ? 'Aprovado e executado.' : (s === 'rejected' ? 'Rejeitada.' : 'Estado: ' + s);\nreturn [{ json: { status: s, mensagem: msg, current_context: m.current_context || null, erro: r.exc ? 'permissao ou erro no Ritmo' : null } }];"
+   },
+   "id": "n204",
+   "name": "Formata resposta ao operador",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    920,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {
+     "responseCode": 200
+    }
+   },
+   "id": "n205",
+   "name": "Responde ao operador",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1160,
+    200
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Aprovação Humana (Harpa/Painel)": {
+   "main": [
+    [
+     {
+      "node": "Valida pedido e credencial do aprovador",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Valida pedido e credencial do aprovador": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Aprova/Rejeita (revalida na camada de execução)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Aprova/Rejeita (revalida na camada de execução)": {
+   "main": [
+    [
+     {
+      "node": "Formata resposta ao operador",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata resposta ao operador": {
+   "main": [
+    [
+     {
+      "node": "Responde ao operador",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

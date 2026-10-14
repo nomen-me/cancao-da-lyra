@@ -1,0 +1,44 @@
+test_A (synapse_core.tests.test_cancao.TestA_Reconciliacao.test_A) ... ok
+test_B (synapse_core.tests.test_cancao.TestB_HoldExpirado.test_B) ... ok
+test_C (synapse_core.tests.test_cancao.TestC_Concurrency.test_C) ... ok
+test_C_sem_versao_e_rejeitada (synapse_core.tests.test_cancao.TestC_Concurrency.test_C_sem_versao_e_rejeitada) ... ok
+test_D_commit_junto (synapse_core.tests.test_cancao.TestD_OutboxTransacional.test_D_commit_junto) ... ok
+test_D_falha_desfaz_ambos (synapse_core.tests.test_cancao.TestD_OutboxTransacional.test_D_falha_desfaz_ambos) ... ok
+test_D_seq_sem_buracos_apos_rollback (synapse_core.tests.test_cancao.TestD_OutboxTransacional.test_D_seq_sem_buracos_apos_rollback) ... ok
+test_E (synapse_core.tests.test_cancao.TestE_Poison.test_E) ... ok
+test_E_impacto_indeterminado_mantem_bloqueio (synapse_core.tests.test_cancao.TestE_Poison.test_E_impacto_indeterminado_mantem_bloqueio) ... ok
+test_F (synapse_core.tests.test_cancao.TestF_Purge.test_F) ... ok
+test_F_config_retencao_e_nao_hardcoded (synapse_core.tests.test_cancao.TestF_Purge.test_F_config_retencao_e_nao_hardcoded) ... ok
+test_G_aprovacao_expirada (synapse_core.tests.test_cancao.TestG_HarpaObsoleta.test_G_aprovacao_expirada) ... ok
+test_G_contexto_alterado (synapse_core.tests.test_cancao.TestG_HarpaObsoleta.test_G_contexto_alterado) ... ok
+test_G_controle_positivo_e_permissao (synapse_core.tests.test_cancao.TestG_HarpaObsoleta.test_G_controle_positivo_e_permissao) ... ok
+test_H (synapse_core.tests.test_cancao.TestH_CausalDepth.test_H) ... ok
+test_H_eventos_da_lyra_geram_consequencias (synapse_core.tests.test_cancao.TestH_CausalDepth.test_H_eventos_da_lyra_geram_consequencias) ... ok
+test_H_funcao_pura (synapse_core.tests.test_cancao.TestH_CausalDepth.test_H_funcao_pura) ... ok
+test_I_max_events_imediato (synapse_core.tests.test_cancao.TestI_Aggregation.test_I_max_events_imediato) ... ok
+test_I_max_wait (synapse_core.tests.test_cancao.TestI_Aggregation.test_I_max_wait) ... ok
+test_J_concorrente_duas_conexoes (synapse_core.tests.test_cancao.TestJ_Idempotencia.test_J_concorrente_duas_conexoes) ... ok
+test_J_reenvio_de_conflito_nao_reexecuta (synapse_core.tests.test_cancao.TestJ_Idempotencia.test_J_reenvio_de_conflito_nao_reexecuta) ... ok
+test_J_sequencial (synapse_core.tests.test_cancao.TestJ_Idempotencia.test_J_sequencial) ... ok
+test_agregacao_em_espera_nao_e_atraso (synapse_core.tests.test_cancao.TestK_Heartbeat.test_agregacao_em_espera_nao_e_atraso) ... ok
+test_divergencia_do_consumidor (synapse_core.tests.test_cancao.TestK_Heartbeat.test_divergencia_do_consumidor) ... ok
+test_ponte_parada_e_detectada (synapse_core.tests.test_cancao.TestK_Heartbeat.test_ponte_parada_e_detectada) ... ok
+test_falha_da_lyra_evento_continua_recuperavel_e_so_entao_processed (synapse_core.tests.test_v2.TestAgregacaoRecuperavel.test_falha_da_lyra_evento_continua_recuperavel_e_so_entao_processed) ... ok
+test_item_price_e_stock_ledger_entry (synapse_core.tests.test_v2.TestEventosDeNegocioReais.test_item_price_e_stock_ledger_entry) ... EVENTOS DO ITEM: {'item.price_changed': 1, 'item.stock_changed': 1}
+ok
+test_10_12_11_nao_descarta_e_segura_o_sucessor (synapse_core.tests.test_v2.TestOrdemPorStateVersion.test_10_12_11_nao_descarta_e_segura_o_sucessor) ... ok
+test_predecessor_perdido_vai_para_reconciling (synapse_core.tests.test_v2.TestOrdemPorStateVersion.test_predecessor_perdido_vai_para_reconciling) ... ok
+test_reject_autorizado_e_fila_do_painel (synapse_core.tests.test_v2.TestReject.test_reject_autorizado_e_fila_do_painel) ... ok
+test_reject_sem_permissao_recusada_operacao_intacta (synapse_core.tests.test_v2.TestReject.test_reject_sem_permissao_recusada_operacao_intacta) ... ok
+test_G_aprovacao_expirada (synapse_core.tests.test_cancao.TestG_HarpaObsoleta.test_G_aprovacao_expirada) ... ok
+test_G_contexto_alterado (synapse_core.tests.test_cancao.TestG_HarpaObsoleta.test_G_contexto_alterado) ... ok
+test_G_controle_positivo_e_permissao (synapse_core.tests.test_cancao.TestG_HarpaObsoleta.test_G_controle_positivo_e_permissao) ... ok
+test_operacao_da_lyra_e_aceita_e_idempotente (synapse_core.tests.test_contrato_lyra.TestContratoLyra.test_operacao_da_lyra_e_aceita_e_idempotente) ... ok
+test_entrega_e_reentrega (synapse_core.tests.test_relay.TestRelay.test_entrega_e_reentrega) ... ok
+test_fuso_nao_causa_reentrega_imediata (synapse_core.tests.test_relay.TestRelay.test_fuso_nao_causa_reentrega_imediata)
+Regressao: NOW() do MariaDB (UTC) vs now() do Frappe (fuso do site) reentregava a todo tick. ... ok
+
+----------------------------------------------------------------------
+Ran 37 tests in 31.251s
+
+OK

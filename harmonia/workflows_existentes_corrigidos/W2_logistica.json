@@ -1,0 +1,795 @@
+{
+ "name": "Synapse W2 — Logística e Rastreio Automático",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "erpnext-invoice",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-invoice",
+   "name": "Webhook ERPNext — Fatura Emitida",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "text",
+    "responseBody": "ok",
+    "options": {}
+   },
+   "id": "respond",
+   "name": "Responde OK",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    460,
+    180
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst doc = body.doc || body;\n\nreturn [{\n  json: {\n    invoice_id: doc.name,\n    customer: doc.customer,\n    customer_name: doc.customer_name,\n    mobile_no: (doc.contact_mobile || '').replace(/\\D/g, ''),\n    endereco: {\n      cep: (doc.shipping_address_details?.pincode || '').replace(/\\D/g, ''),\n      rua: doc.shipping_address_details?.address_line1 || '',\n      numero: doc.shipping_address_details?.address_line2 || '',\n      bairro: doc.shipping_address_details?.county || '',\n      cidade: doc.shipping_address_details?.city || '',\n      estado: doc.shipping_address_details?.state || ''\n    },\n    peso: doc.total_net_weight || 0.5,\n    altura: doc.custom_altura_cm || 10,\n    largura: doc.custom_largura_cm || 15,\n    comprimento: doc.custom_comprimento_cm || 20,\n    valor_declarado: doc.grand_total || 0\n  }\n}];"
+   },
+   "id": "parse-invoice",
+   "name": "Extrai Dados da Fatura",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ],
+   "notes": "shipping_address_details pode vir vazio se o webhook do ERPNext não expandir a child table de endereço — nesse caso, considerar um fallback buscando o DocType Address separadamente."
+  },
+  {
+   "parameters": {
+    "url": "https://melhorenvio.com.br/api/v2/me/shipment/calculate",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Bearer {{$env.MELHOR_ENVIO_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "User-Agent",
+       "value": "Synapse/1.0 (suporte@synapse.com.br)"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"from\": { \"postal_code\": \"{{$env.REMETENTE_CEP}}\" },\n  \"to\": { \"postal_code\": \"{{$json.endereco.cep}}\" },\n  \"package\": {\n    \"height\": {{$json.altura}},\n    \"width\": {{$json.largura}},\n    \"length\": {{$json.comprimento}},\n    \"weight\": {{$json.peso}}\n  },\n  \"options\": {\n    \"insurance_value\": {{$json.valor_declarado}},\n    \"receipt\": false,\n    \"own_hand\": false\n  },\n  \"services\": \"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17\"\n}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "cotar-frete",
+   "name": "Melhor Envio — Cotar Fretes",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "// Transportadoras excluídas: Correios (1,2) e Azul Cargo (7)\nconst EXCLUIDOS = [1, 2, 7];\nconst CUSTO_MAX_POR_DIA = 0.55;\n\nconst cotacoes = $input.first().json;\n\nconst validas = cotacoes.filter(c =>\n  !EXCLUIDOS.includes(c.id) &&\n  !c.error &&\n  c.price &&\n  c.delivery_range\n);\n\nif (validas.length == 0) throw new Error('Nenhuma transportadora válida disponível');\n\nvalidas.sort((a, b) => parseFloat(a.price) - parseFloat(b.price));\n\nconst base = validas[0];\nconst prazo_base = base.delivery_range.max;\nconst preco_base = parseFloat(base.price);\n\nlet escolhida = base;\n\nfor (const c of validas) {\n  const preco = parseFloat(c.price);\n  const prazo = c.delivery_range.max;\n\n  if (prazo < prazo_base) {\n    const dias_reduzidos = prazo_base - prazo;\n    const custo_extra = preco - preco_base;\n    const custo_por_dia = custo_extra / dias_reduzidos;\n\n    if (custo_por_dia <= CUSTO_MAX_POR_DIA) {\n      if (prazo < escolhida.delivery_range.max ||\n        (prazo == escolhida.delivery_range.max && preco < parseFloat(escolhida.price))) {\n        escolhida = c;\n      }\n    }\n  }\n}\n\nreturn [{\n  json: {\n    transportadora_id: escolhida.id,\n    transportadora_nome: escolhida.name,\n    preco: parseFloat(escolhida.price),\n    prazo_max: escolhida.delivery_range.max,\n    invoice_id: $node['Extrai Dados da Fatura'].json.invoice_id,\n    customer_name: $node['Extrai Dados da Fatura'].json.customer_name,\n    mobile_no: $node['Extrai Dados da Fatura'].json.mobile_no,\n    endereco: $node['Extrai Dados da Fatura'].json.endereco,\n    peso: $node['Extrai Dados da Fatura'].json.peso,\n    altura: $node['Extrai Dados da Fatura'].json.altura,\n    largura: $node['Extrai Dados da Fatura'].json.largura,\n    comprimento: $node['Extrai Dados da Fatura'].json.comprimento,\n    valor_declarado: $node['Extrai Dados da Fatura'].json.valor_declarado\n  }\n}];"
+   },
+   "id": "seleciona-transportadora",
+   "name": "Selecciona Transportadora",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "https://melhorenvio.com.br/api/v2/me/balance",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Bearer {{$env.MELHOR_ENVIO_TOKEN}}"
+      },
+      {
+       "name": "User-Agent",
+       "value": "Synapse/1.0 (suporte@synapse.com.br)"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "id": "check-balance",
+   "name": "Melhor Envio — Verifica Saldo",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1120,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const saldo = parseFloat($json.balance || 0);\nconst preco = $node['Selecciona Transportadora'].json.preco;\n\nif (saldo < preco) {\n  throw new Error(`Saldo insuficiente no Melhor Envio. Saldo: R$${saldo.toFixed(2)} | Frete: R$${preco.toFixed(2)}. Recarregue a carteira.`);\n}\n\nreturn [{ json: { saldo_ok: true, saldo } }];"
+   },
+   "id": "validate-balance",
+   "name": "Valida Saldo Suficiente",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1340,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "https://melhorenvio.com.br/api/v2/me/cart",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Bearer {{$env.MELHOR_ENVIO_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "User-Agent",
+       "value": "Synapse/1.0 (suporte@synapse.com.br)"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"service\": {{$node['Selecciona Transportadora'].json.transportadora_id}},\n  \"from\": {\n    \"name\": \"{{$env.REMETENTE_NOME}}\",\n    \"phone\": \"{{$env.REMETENTE_TELEFONE}}\",\n    \"email\": \"{{$env.REMETENTE_EMAIL}}\",\n    \"document\": \"{{$env.REMETENTE_CPF_CNPJ}}\",\n    \"address\": \"{{$env.REMETENTE_ENDERECO}}\",\n    \"number\": \"{{$env.REMETENTE_NUMERO}}\",\n    \"district\": \"{{$env.REMETENTE_BAIRRO}}\",\n    \"city\": \"{{$env.REMETENTE_CIDADE}}\",\n    \"state_abbr\": \"{{$env.REMETENTE_ESTADO}}\",\n    \"postal_code\": \"{{$env.REMETENTE_CEP}}\",\n    \"country_id\": \"BR\"\n  },\n  \"to\": {\n    \"name\": \"{{$node['Selecciona Transportadora'].json.customer_name}}\",\n    \"phone\": \"{{$node['Selecciona Transportadora'].json.mobile_no}}\",\n    \"address\": \"{{$node['Selecciona Transportadora'].json.endereco.rua}}\",\n    \"number\": \"{{$node['Selecciona Transportadora'].json.endereco.numero}}\",\n    \"district\": \"{{$node['Selecciona Transportadora'].json.endereco.bairro}}\",\n    \"city\": \"{{$node['Selecciona Transportadora'].json.endereco.cidade}}\",\n    \"state_abbr\": \"{{$node['Selecciona Transportadora'].json.endereco.estado}}\",\n    \"postal_code\": \"{{$node['Selecciona Transportadora'].json.endereco.cep}}\",\n    \"country_id\": \"BR\"\n  },\n  \"products\": [{\n    \"name\": \"Pedido {{$node['Selecciona Transportadora'].json.invoice_id}}\",\n    \"quantity\": 1,\n    \"unitary_value\": {{$node['Selecciona Transportadora'].json.valor_declarado}}\n  }],\n  \"volumes\": [{\n    \"height\": {{$node['Selecciona Transportadora'].json.altura}},\n    \"width\": {{$node['Selecciona Transportadora'].json.largura}},\n    \"length\": {{$node['Selecciona Transportadora'].json.comprimento}},\n    \"weight\": {{$node['Selecciona Transportadora'].json.peso}}\n  }],\n  \"options\": {\n    \"insurance_value\": {{$node['Selecciona Transportadora'].json.valor_declarado}},\n    \"receipt\": false,\n    \"own_hand\": false,\n    \"tags\": [{ \"tag\": \"{{$node['Selecciona Transportadora'].json.invoice_id}}\", \"url\": null }]\n  }\n}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "add-to-cart",
+   "name": "Melhor Envio — Adiciona ao Carrinho",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1560,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "https://melhorenvio.com.br/api/v2/me/shipment/checkout",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Bearer {{$env.MELHOR_ENVIO_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "User-Agent",
+       "value": "Synapse/1.0 (suporte@synapse.com.br)"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"orders\": [\"{{$json.id}}\"]}",
+    "method": "POST"
+   },
+   "id": "checkout",
+   "name": "Melhor Envio — Checkout",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1780,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "https://melhorenvio.com.br/api/v2/me/shipment/generate",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Bearer {{$env.MELHOR_ENVIO_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "User-Agent",
+       "value": "Synapse/1.0 (suporte@synapse.com.br)"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"orders\": [\"{{$node['Melhor Envio — Adiciona ao Carrinho'].json.id}}\"]}",
+    "method": "POST"
+   },
+   "id": "generate-label",
+   "name": "Melhor Envio — Gera Etiqueta",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2000,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const order_id = $node['Melhor Envio — Adiciona ao Carrinho'].json.id;\nconst shipment = $input.first().json;\nconst tracking = shipment[order_id]?.tracking || '';\n\nreturn [{\n  json: {\n    order_id,\n    tracking,\n    transportadora: $node['Selecciona Transportadora'].json.transportadora_nome,\n    prazo: $node['Selecciona Transportadora'].json.prazo_max,\n    invoice_id: $node['Selecciona Transportadora'].json.invoice_id,\n    customer_name: $node['Selecciona Transportadora'].json.customer_name,\n    mobile_no: $node['Selecciona Transportadora'].json.mobile_no\n  }\n}];"
+   },
+   "id": "extract-tracking",
+   "name": "Extrai Código de Rastreio",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    2220,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$json.invoice_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"custom_tracking_code\": \"{{$json.tracking}}\", \"custom_transportadora\": \"{{$json.transportadora}}\", \"custom_melhorenvio_order_id\": \"{{$json.order_id}}\"}",
+    "method": "PUT"
+   },
+   "id": "save-tracking",
+   "name": "ERPNext — Salva Rastreio",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2440,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"inbox_id\": {{$env.CHATWOOT_WHATSAPP_INBOX_ID}},\n  \"meta\": { \"sender\": { \"phone_number\": \"{{$json.telefone_normalizado}}\" } },\n  \"message\": {\n    \"content\": \"📦 Olá *{{$json.customer_name}}*! Seu pedido *#{{$json.invoice_id}}* foi despachado via *{{$json.transportadora}}*.\\n\\nRastreio: *{{$json.tracking}}*\\nPrazo: até *{{$json.prazo}} dias úteis*\\n\\nAcompanhe: https://melhorrastreio.com.br/rastreio/{{$json.tracking}}\"\n  }\n}",
+    "method": "POST"
+   },
+   "id": "whatsapp-despacho",
+   "name": "WhatsApp — Notifica Despacho",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2440,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "rule": {
+     "interval": [
+      {
+       "field": "hours",
+       "hoursInterval": 6
+      }
+     ]
+    }
+   },
+   "id": "polling-trigger",
+   "name": "Polling Rastreio a cada 6h",
+   "type": "n8n-nodes-base.scheduleTrigger",
+   "typeVersion": 1,
+   "position": [
+    240,
+    700
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice?filters=[[\"custom_tracking_code\",\"!=\",\"\"],[\"custom_entregue\",\"!=\",\"1\"]]&fields=[\"name\",\"custom_tracking_code\",\"customer_name\",\"contact_mobile\",\"custom_melhorenvio_order_id\"]",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "id": "get-in-transit",
+   "name": "ERPNext — Busca Pedidos em Trânsito",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    460,
+    700
+   ]
+  },
+  {
+   "parameters": {
+    "fieldToSplitOut": "data",
+    "options": {}
+   },
+   "id": "split-orders",
+   "name": "Split Pedidos",
+   "type": "n8n-nodes-base.splitOut",
+   "typeVersion": 1,
+   "position": [
+    680,
+    700
+   ]
+  },
+  {
+   "parameters": {
+    "url": "https://melhorenvio.com.br/api/v2/me/orders/tracking",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "Bearer {{$env.MELHOR_ENVIO_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "User-Agent",
+       "value": "Synapse/1.0 (suporte@synapse.com.br)"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ orders: $json.ids }) }}",
+    "method": "POST"
+   },
+   "id": "check-tracking-lote",
+   "name": "Melhor Envio — Verifica Rastreio (Lote)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    700
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const order = $node[\"Recombina Invoices e Rastreio\"].json.tracking;\nconst invoice = $json;\nconst order_id = invoice.custom_melhorenvio_order_id;\nconst tracking_data = order[order_id];\n\nif (!tracking_data) return [];\n\nconst status = tracking_data.status || '';\nconst events = tracking_data.tracking || tracking_data.volumes?.[0]?.tracking || [];\nconst last_event = events.slice(-1)[0]?.description || '';\n\nconst MENSAGENS = {\n  'posted':           '📬 Seu pedido *#' + invoice.name + '* foi postado e está a caminho!',\n  'in_transit':       '🚚 Seu pedido *#' + invoice.name + '* está em trânsito. Último evento: ' + last_event,\n  'out_for_delivery': '🏃 Seu pedido *#' + invoice.name + '* *saiu para entrega hoje!* Fique atento.',\n  'delivered':        '✅ Seu pedido *#' + invoice.name + '* foi *entregue com sucesso!* Qualquer dúvida, estamos aqui.'\n};\n\nconst mensagem = MENSAGENS[status];\nif (!mensagem) return [];\n\nreturn [{\n  json: {\n    invoice_id: invoice.name,\n    status,\n    mensagem,\n    mobile_no: (invoice.contact_mobile || '').replace(/\\D/g, ''),\n    customer_name: invoice.customer_name,\n    entregue: status == 'delivered' ? 1 : 0\n  }\n}];"
+   },
+   "id": "process-tracking",
+   "name": "Processa Status de Rastreio",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1120,
+    700
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"inbox_id\": {{$env.CHATWOOT_WHATSAPP_INBOX_ID}},\n  \"meta\": { \"sender\": { \"phone_number\": \"{{$json.telefone_normalizado}}\" } },\n  \"message\": { \"content\": \"{{$json.mensagem}}\" }\n}",
+    "method": "POST"
+   },
+   "id": "whatsapp-update",
+   "name": "WhatsApp — Envia Update Rastreio",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1340,
+    700
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "number": [
+      {
+       "value1": "={{$json.entregue}}",
+       "operation": "equal",
+       "value2": 1
+      }
+     ]
+    }
+   },
+   "id": "is-delivered",
+   "name": "Foi Entregue?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1560,
+    700
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice/{{$json.invoice_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "{\"custom_entregue\": \"1\", \"custom_data_entrega\": \"{{$now.toISODate()}}\"}",
+    "method": "PUT"
+   },
+   "id": "mark-delivered",
+   "name": "ERPNext — Marca Entregue",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1780,
+    620
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const invoices = $json.data || [];\nconst ids = invoices.map(i => i.custom_melhorenvio_order_id).filter(Boolean);\nreturn [{ json: { ids, invoices } }];\n"
+   },
+   "id": "monta-lote-ids",
+   "name": "Monta Lista de IDs (Lote)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const doc = $json;\nlet raw = String($json.mobile_no || '').replace(/\\D/g, '');\nlet telefone_normalizado;\nif (raw.startsWith('55') && raw.length >= 12) {\n  telefone_normalizado = '+' + raw;\n} else if (raw.length === 10 || raw.length === 11) {\n  telefone_normalizado = '+55' + raw;\n} else {\n  telefone_normalizado = '+' + raw;\n}\nreturn [{ json: { ...doc, telefone_normalizado } }];\n"
+   },
+   "id": "normaliza-tel-0-whatsapp-notifica-despacho",
+   "name": "Normaliza Telefone (WhatsApp — Notifica Despacho)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const doc = $json;\nlet raw = String($json.mobile_no || '').replace(/\\D/g, '');\nlet telefone_normalizado;\nif (raw.startsWith('55') && raw.length >= 12) {\n  telefone_normalizado = '+' + raw;\n} else if (raw.length === 10 || raw.length === 11) {\n  telefone_normalizado = '+55' + raw;\n} else {\n  telefone_normalizado = '+' + raw;\n}\nreturn [{ json: { ...doc, telefone_normalizado } }];\n"
+   },
+   "id": "normaliza-tel-1-whatsapp-envia-update-rastreio",
+   "name": "Normaliza Telefone (WhatsApp — Envia Update Rastreio)",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const tracking = $json; // resposta do lote (chave = order_id)\nconst invoices = $node[\"Monta Lista de IDs (Lote)\"].json.invoices || [];\nreturn [{ json: { data: invoices, tracking } }];\n"
+   },
+   "id": "recombina-invoice-tracking",
+   "name": "Recombina Invoices e Rastreio",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1120,
+    500
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook ERPNext — Fatura Emitida": {
+   "main": [
+    [
+     {
+      "node": "Responde OK",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Extrai Dados da Fatura",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai Dados da Fatura": {
+   "main": [
+    [
+     {
+      "node": "Melhor Envio — Cotar Fretes",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Melhor Envio — Cotar Fretes": {
+   "main": [
+    [
+     {
+      "node": "Selecciona Transportadora",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Selecciona Transportadora": {
+   "main": [
+    [
+     {
+      "node": "Melhor Envio — Verifica Saldo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Melhor Envio — Verifica Saldo": {
+   "main": [
+    [
+     {
+      "node": "Valida Saldo Suficiente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Valida Saldo Suficiente": {
+   "main": [
+    [
+     {
+      "node": "Melhor Envio — Adiciona ao Carrinho",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Melhor Envio — Adiciona ao Carrinho": {
+   "main": [
+    [
+     {
+      "node": "Melhor Envio — Checkout",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Melhor Envio — Checkout": {
+   "main": [
+    [
+     {
+      "node": "Melhor Envio — Gera Etiqueta",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Melhor Envio — Gera Etiqueta": {
+   "main": [
+    [
+     {
+      "node": "Extrai Código de Rastreio",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai Código de Rastreio": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Salva Rastreio",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Normaliza Telefone (WhatsApp — Notifica Despacho)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Polling Rastreio a cada 6h": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Busca Pedidos em Trânsito",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "ERPNext — Busca Pedidos em Trânsito": {
+   "main": [
+    [
+     {
+      "node": "Monta Lista de IDs (Lote)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Split Pedidos": {
+   "main": [
+    [
+     {
+      "node": "Processa Status de Rastreio",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Processa Status de Rastreio": {
+   "main": [
+    [
+     {
+      "node": "Normaliza Telefone (WhatsApp — Envia Update Rastreio)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "WhatsApp — Envia Update Rastreio": {
+   "main": [
+    [
+     {
+      "node": "Foi Entregue?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Foi Entregue?": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Marca Entregue",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "Monta Lista de IDs (Lote)": {
+   "main": [
+    [
+     {
+      "node": "Melhor Envio — Verifica Rastreio (Lote)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Melhor Envio — Verifica Rastreio (Lote)": {
+   "main": [
+    [
+     {
+      "node": "Recombina Invoices e Rastreio",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Normaliza Telefone (WhatsApp — Notifica Despacho)": {
+   "main": [
+    [
+     {
+      "node": "WhatsApp — Notifica Despacho",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Normaliza Telefone (WhatsApp — Envia Update Rastreio)": {
+   "main": [
+    [
+     {
+      "node": "WhatsApp — Envia Update Rastreio",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Recombina Invoices e Rastreio": {
+   "main": [
+    [
+     {
+      "node": "Split Pedidos",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}

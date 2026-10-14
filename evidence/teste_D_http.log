@@ -1,0 +1,4 @@
+entity_id	seq	event_type	status
+HTTP-M1	4	item.created	PENDING
+HTTP-M2	5	item.created	PENDING
+--- prova de falha (doc2 invalido): item_M1=0 evento_M1=0 versao_M1=0 (saida acima do passo anterior)

@@ -1,0 +1,320 @@
+{
+ "name": "Synapse — Atendimento — Mensagens da Conversa",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "atendimento/mensagens",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-atend-mensagens",
+   "name": "Webhook — Mensagens da Conversa",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations/{{$json.conversa_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-conversa-cw",
+   "name": "Chatwoot — Detalhe da Conversa (pega contato)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    460,
+    300
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "const conv = $input.first().json;\nconst identifier = conv.meta?.sender?.identifier || null;\nconst nomeContato = conv.meta?.sender?.name || '';\nconst telefoneContato = conv.meta?.sender?.phone_number || '';\nreturn [{ json: { ...$json, erpnext_id: identifier, nome_contato: nomeContato, telefone_contato: telefoneContato } }];"
+   },
+   "id": "extrai-identifier",
+   "name": "Extrai Identifier do Contato",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    680,
+    300
+   ],
+   "notes": "identifier = Customer.name do Ritmo, gravado pelo W1_cadastros quando o contato foi criado no Chatwoot. Se vier null, o cliente nunca foi sincronizado (ex: contato criado direto no Chatwoot, fora do fluxo normal)."
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/{{$env.CHATWOOT_ACCOUNT_ID}}/conversations/{{$json.conversa_id}}/messages",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "={{$env.CHATWOOT_API_TOKEN}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-mensagens-cw",
+   "name": "Chatwoot — Mensagens da Conversa",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    200
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Customer/{{$json.erpnext_id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-cliente-ritmo",
+   "name": "Ritmo — Busca Cliente (se sincronizado)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    400
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "const meta = $node['Extrai Identifier do Contato'].json;\nconst mensagensCw = $node['Chatwoot — Mensagens da Conversa'].json.data?.payload || $node['Chatwoot — Mensagens da Conversa'].json.payload || [];\nconst clienteRitmo = $input.first().json.data || null;\n\nconst mensagens = mensagensCw.map(m => ({\n  autor: m.message_type === 'incoming' ? 'cliente' : (m.message_type === 'outgoing' ? 'atendente' : 'sistema'),\n  texto: m.content || '',\n  hora: m.created_at\n}));\n\nconst cliente = clienteRitmo ? {\n  nome: clienteRitmo.customer_name || meta.nome_contato,\n  cpf: clienteRitmo.tax_id || null,\n  contato: clienteRitmo.mobile_no || meta.telefone_contato\n} : {\n  nome: meta.nome_contato,\n  cpf: null,\n  contato: meta.telefone_contato\n};\n\nreturn [{ json: { mensagens, cliente, erpnext_id: meta.erpnext_id } }];"
+   },
+   "id": "formata-mensagens-cliente",
+   "name": "Formata Mensagens e Cliente",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1120,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Invoice",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "filters",
+       "value": "=[[\"customer\",\"=\",\"{{$json.erpnext_id}}\"]]"
+      },
+      {
+       "name": "fields",
+       "value": "[\"name\",\"status\"]"
+      },
+      {
+       "name": "limit_page_length",
+       "value": "5"
+      },
+      {
+       "name": "order_by",
+       "value": "creation desc"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-pedidos-ritmo",
+   "name": "Ritmo — Últimos Pedidos do Cliente",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1340,
+    300
+   ],
+   "continueOnFail": true,
+   "notes": "Só roda com erpnext_id de verdade — se o cliente não é sincronizado, essa lista vem vazia (tratado no node seguinte, não é erro)."
+  },
+  {
+   "parameters": {
+    "jsCode": "const pedidosRitmo = $input.first().json.data || [];\nconst ultimos_pedidos = pedidosRitmo.map(p => ({ id: p.name, status: p.status || null }));\nreturn [{ json: { ultimos_pedidos } }];"
+   },
+   "id": "formata-pedidos",
+   "name": "Formata Pedidos",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1560,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const dadosMsg = $node['Formata Mensagens e Cliente'].json;\nconst dadosPedidos = $input.first().json;\nreturn [{ json: { ...dadosMsg, ultimos_pedidos: dadosPedidos.ultimos_pedidos || [] } }];"
+   },
+   "id": "junta-resposta",
+   "name": "Junta Resposta Final",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1780,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-mensagens",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    2000,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Mensagens da Conversa": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Detalhe da Conversa (pega contato)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Detalhe da Conversa (pega contato)": {
+   "main": [
+    [
+     {
+      "node": "Extrai Identifier do Contato",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai Identifier do Contato": {
+   "main": [
+    [
+     {
+      "node": "Chatwoot — Mensagens da Conversa",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Ritmo — Busca Cliente (se sincronizado)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chatwoot — Mensagens da Conversa": {
+   "main": [
+    [
+     {
+      "node": "Formata Mensagens e Cliente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Busca Cliente (se sincronizado)": {
+   "main": [
+    [
+     {
+      "node": "Formata Mensagens e Cliente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Mensagens e Cliente": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Últimos Pedidos do Cliente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Últimos Pedidos do Cliente": {
+   "main": [
+    [
+     {
+      "node": "Formata Pedidos",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Pedidos": {
+   "main": [
+    [
+     {
+      "node": "Junta Resposta Final",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Junta Resposta Final": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

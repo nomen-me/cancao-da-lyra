@@ -1,0 +1,139 @@
+{
+ "name": "Synapse — Lyra Interna — Gerar Atributos de Produto",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "lyra/gerar-atributos",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-lyra-atributos",
+   "name": "Webhook — Gerar Atributos",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "// Função genuinamente nova — geração/inferência não existe em nenhum\n// workflow atual (gerenciar_cadastro só grava o que já vem pronto).\nconst system_prompt = 'Você sugere atributos de catálogo pra um produto de '\n  + 'e-commerce brasileiro, a partir dos dados que o lojista já digitou. '\n  + 'Responda APENAS com um objeto JSON: {\"categoria\": string|null, \"ncm\": '\n  + 'string|null (formato 0000.00.00), \"preco\": string|null (formato \"R$ 00,00\"), '\n  + '\"justificativa\": string|null}. Para cada atributo, só preencha um valor se '\n  + 'os dados fornecidos derem base real pra isso. Se não houver informação '\n  + 'suficiente pra um atributo, retorne null nesse atributo — NUNCA invente ou '\n  + 'estime um valor sem base nos dados. Quando qualquer atributo vier null, '\n  + 'preencha \"justificativa\" com uma frase curta dizendo o que falta pra '\n  + 'estimar (ex.: \"sem categoria ou palavras-chave do produto, não é possível '\n  + 'sugerir NCM nem preço\"). Dado desconhecido é uma resposta válida.';\n\nconst user_prompt = JSON.stringify($json);\n\nreturn [{ json: { modelo: 'gemini-2.0-flash', system_prompt, user_prompt } }];\n"
+   },
+   "id": "monta-prompt-atributos",
+   "name": "Monta Prompt de Geração",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$json.modelo}}:generateContent?key={{$env.GEMINI_API_KEY}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"system_instruction\": { \"parts\": [{ \"text\": \"{{$json.system_prompt}}\" }] },\n  \"contents\": [{ \"role\": \"user\", \"parts\": [{ \"text\": \"{{$json.user_prompt}}\" }] }],\n  \"generationConfig\": { \"response_mime_type\": \"application/json\" }\n}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "gemini-gera",
+   "name": "Gemini Flash — Gera Atributos",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "const resp = $input.first().json;\nlet atributos = { categoria: null, ncm: null, preco: null, justificativa: null };\ntry {\n  const texto = resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  const parsed = JSON.parse(texto);\n  // Só aceita o que veio de fato — não troca null por '' nem inventa default.\n  atributos = {\n    categoria: parsed.categoria ?? null,\n    ncm: parsed.ncm ?? null,\n    preco: parsed.preco ?? null,\n    justificativa: parsed.justificativa ?? null\n  };\n} catch(e) {\n  atributos.justificativa = 'Não foi possível interpretar a resposta da Lyra agora';\n}\nreturn [{ json: atributos }];\n"
+   },
+   "id": "formata-resposta-atributos",
+   "name": "Formata Resposta pro Painel",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-lyra-atributos",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1120,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Gerar Atributos": {
+   "main": [
+    [
+     {
+      "node": "Monta Prompt de Geração",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Prompt de Geração": {
+   "main": [
+    [
+     {
+      "node": "Gemini Flash — Gera Atributos",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Gemini Flash — Gera Atributos": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pro Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pro Painel": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

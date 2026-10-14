@@ -1,0 +1,199 @@
+{
+ "name": "Synapse — Lyra Interna — Consultar Registro",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "lyra/consultar",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-lyra-consultar",
+   "name": "Webhook — Consultar Registro",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "// Mapa explícito, igual ao que já existe no L2 — sem fallback. Um\n// tipo fora dessa lista é erro, não uma suposição de que é 'cliente'.\nconst mapaTipoDoctype = { cliente: 'Customer', produto: 'Item', fornecedor: 'Supplier' };\nconst doctype = mapaTipoDoctype[$json.tipo];\n\nif (!doctype) {\n  throw new Error('tipo_entidade inválido: \"' + $json.tipo + '\" — esperado cliente, produto ou fornecedor');\n}\n\nreturn [{ json: { ...$json, doctype } }];\n"
+   },
+   "id": "mapeia-doctype",
+   "name": "Mapeia tipo → Doctype",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/{{$json.doctype}}/{{$json.id}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "busca-registro",
+   "name": "Ritmo — Busca Registro Completo",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "const meta = $node['Mapeia tipo → Doctype'].json;\nconst registro = $input.first().json.data || {};\n\nconst system_prompt = 'Você é a Lyra, assistente do lojista dentro do painel Synapse. '\n  + 'Responda a pergunta usando SOMENTE os dados fornecidos abaixo. Se a resposta '\n  + 'não estiver nos dados, diga que não tem essa informação. Seja direto, uma ou '\n  + 'duas frases, sem repetir a pergunta.\\\\n\\\\nDados do registro:\\\\n' + JSON.stringify(registro);\n\nreturn [{ json: { modelo: 'gemini-2.0-flash', system_prompt, user_prompt: meta.pergunta } }];\n"
+   },
+   "id": "monta-prompt-consultar",
+   "name": "Monta Prompt de Resposta",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$json.modelo}}:generateContent?key={{$env.GEMINI_API_KEY}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\n  \"system_instruction\": { \"parts\": [{ \"text\": \"{{$json.system_prompt}}\" }] },\n  \"contents\": [{ \"role\": \"user\", \"parts\": [{ \"text\": \"{{$json.user_prompt}}\" }] }]\n}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "gemini-responde",
+   "name": "Gemini Flash — Responde",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1120,
+    300
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "const resp = $input.first().json;\nconst resposta = resp.candidates?.[0]?.content?.parts?.[0]?.text\n  || 'Não consegui gerar uma resposta agora.';\nreturn [{ json: { resposta } }];\n"
+   },
+   "id": "formata-resposta-consultar",
+   "name": "Formata Resposta pro Painel",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1340,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-lyra-consultar",
+   "name": "Responde ao Painel",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1560,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Consultar Registro": {
+   "main": [
+    [
+     {
+      "node": "Mapeia tipo → Doctype",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Mapeia tipo → Doctype": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Busca Registro Completo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Busca Registro Completo": {
+   "main": [
+    [
+     {
+      "node": "Monta Prompt de Resposta",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Prompt de Resposta": {
+   "main": [
+    [
+     {
+      "node": "Gemini Flash — Responde",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Gemini Flash — Responde": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pro Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pro Painel": {
+   "main": [
+    [
+     {
+      "node": "Responde ao Painel",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

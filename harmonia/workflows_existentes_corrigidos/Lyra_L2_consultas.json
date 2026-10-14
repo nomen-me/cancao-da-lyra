@@ -1,0 +1,234 @@
+{
+ "name": "Lyra — L2 — Processamento Intermediário & Consultas de Negócio",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "lyra-l2-consulta",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-l2",
+   "name": "Webhook — Chamada de Função (L1 → L2)",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const { funcao, argumentos = {} } = $json;\nlet metodo = 'GET', path = '', qs = {}, body = {};\n\nconst mapaTipoDoctype = { cliente: 'Customer', produto: 'Item', fornecedor: 'Supplier' };\n\nif (funcao === 'gerenciar_cadastro') {\n  // Campos reais do schema: acao (criar|editar|excluir), tipo_entidade,\n  // id_entidade (obrigatório em editar/excluir), dados_cliente.\n  const doctype = mapaTipoDoctype[argumentos.tipo_entidade] || 'Customer';\n  if (argumentos.acao === 'criar') {\n    metodo = 'POST';\n    path = `/api/resource/${encodeURIComponent(doctype)}`;\n    body = argumentos.dados_cliente || {};\n  } else if (argumentos.acao === 'editar') {\n    metodo = 'PUT';\n    path = `/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(argumentos.id_entidade || '')}`;\n    body = argumentos.dados_cliente || {};\n  } else if (argumentos.acao === 'excluir') {\n    metodo = 'DELETE';\n    path = `/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(argumentos.id_entidade || '')}`;\n  } else {\n    throw new Error('acao inválida para gerenciar_cadastro: ' + argumentos.acao);\n  }\n} else if (funcao === 'mecanismo_captura_lead') {\n  // Campos reais: canal_origem, dados_interacao{nome,contato,interesse,...}, score_qualificacao\n  const interacao = argumentos.dados_interacao || {};\n  metodo = 'POST';\n  path = '/api/resource/Lead';\n  body = {\n    lead_name: interacao.nome || 'Lead sem nome',\n    mobile_no: interacao.contato,\n    notes: interacao.interesse || '',\n    source: 'Synapse Chat (Lyra)',\n    // Campos abaixo são customizados — confirme se existem no Lead ou ajuste.\n    synapse_canal_origem: argumentos.canal_origem,\n    synapse_score_qualificacao: argumentos.score_qualificacao\n  };\n} else if (funcao === 'consultar_pedido') {\n  metodo = 'GET';\n  path = '/api/resource/Sales Invoice';\n  qs = {\n    filters: JSON.stringify([['name', 'like', `%${argumentos.identificador || ''}%`]]),\n    fields: JSON.stringify(['name','status','custom_payment_status','custom_tracking_code','custom_entregue']),\n    limit_page_length: '5'\n  };\n} else if (funcao === 'verificar_estoque') {\n  metodo = 'GET';\n  path = '/api/resource/Bin';\n  qs = {\n    filters: JSON.stringify([['item_code', 'like', `%${argumentos.produto || ''}%`]]),\n    fields: JSON.stringify(['item_code','actual_qty','warehouse']),\n    limit_page_length: '5'\n  };\n} else {\n  throw new Error('Função desconhecida: ' + funcao);\n}\n\n// Garante que TODA consulta GET tenha \"fields\" definido — sem isso, o Ritmo\n// recebe fields=undefined (texto literal) e retorna HTTP 500.\nif (metodo === 'GET' && !qs.fields) {\n  qs.fields = JSON.stringify(['name']);\n}\nif (!qs.limit_page_length) {\n  qs.limit_page_length = '5';\n}\n\nreturn [{ json: { funcao, metodo, path, qs, body, conversa_id: $json.conversa_id, tenant_id: $json.tenant_id } }];\n"
+   },
+   "id": "prepara-chamada",
+   "name": "Prepara Chamada ao Ritmo",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.metodo === 'POST'}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "e-escrita",
+   "name": "É Escrita (POST)?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    680,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}{{$json.path}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify($json.body)}}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "ritmo-post",
+   "name": "Ritmo — Grava (POST)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    200
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}{{$json.path}}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "filters",
+       "value": "={{$json.qs.filters}}"
+      },
+      {
+       "name": "fields",
+       "value": "={{$json.qs.fields}}"
+      },
+      {
+       "name": "limit_page_length",
+       "value": "={{$json.qs.limit_page_length}}"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "ritmo-get",
+   "name": "Ritmo — Consulta (GET)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    900,
+    400
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "jsCode": "const input = $input.first().json;\nconst meta = $node['Prepara Chamada ao Ritmo'].json;\n\nconst sucesso = !input.error && (input.data !== undefined || Array.isArray(input));\nconst dados = input.data !== undefined ? input.data : (input.error ? null : input);\n\nreturn [{\n  json: {\n    conversa_id: meta.conversa_id,\n    tenant_id: meta.tenant_id,\n    funcao: meta.funcao,\n    sucesso,\n    dados,\n    erro: input.error || null\n  }\n}];\n"
+   },
+   "id": "formata-resposta",
+   "name": "Formata Resposta pra Lyra",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1120,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{$json}}",
+    "options": {}
+   },
+   "id": "responde-l1",
+   "name": "Responde ao L1",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    1340,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Chamada de Função (L1 → L2)": {
+   "main": [
+    [
+     {
+      "node": "Prepara Chamada ao Ritmo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Prepara Chamada ao Ritmo": {
+   "main": [
+    [
+     {
+      "node": "É Escrita (POST)?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "É Escrita (POST)?": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Grava (POST)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Ritmo — Consulta (GET)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Grava (POST)": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pra Lyra",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Consulta (GET)": {
+   "main": [
+    [
+     {
+      "node": "Formata Resposta pra Lyra",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Formata Resposta pra Lyra": {
+   "main": [
+    [
+     {
+      "node": "Responde ao L1",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

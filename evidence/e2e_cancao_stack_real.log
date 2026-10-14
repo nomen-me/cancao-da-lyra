@@ -1,0 +1,24 @@
+A) alteracao REAL no Ritmo (HTTP PUT /api/resource/Item) -> Outbox transacional -> relay -> n8n
+   relay: {'sent': 1, 'failed': 0}
+--- apos 1 item.updated (esperado ACK + AGGREGATE: aguarda MAX_EVENTS/MAX_WAIT; NAO PROCESSED)
+   seq=1   item.updated               ACK        gate=AGGREGATE retry=0 flushed=False
+B/C) evento desconhecido e evento ignoravel
+   relay: {'sent': 2, 'failed': 0}
+--- esperado: algo.novo -> UNKNOWN+PROCESSED ; operation_held -> IGNORE+PROCESSED
+   seq=2   algo.novo                  PROCESSED  gate=UNKNOWN   retry=0 flushed=False
+   seq=3   operation_held             PROCESSED  gate=IGNORE    retry=0 flushed=False
+D) MAX_EVENTS=3: mais 2 alteracoes reais -> 3o evento aciona flush imediato -> /v1/decide com events completos -> Gemini indisponivel
+--- esperado: 3 item.updated ACK flushed=True, NENHUM PROCESSED (Lyra falhou => recuperavel)
+   seq=1   item.updated               ACK        gate=AGGREGATE retry=0 flushed=True
+   seq=4   item.updated               ACK        gate=AGGREGATE retry=0 flushed=True
+   seq=5   item.updated               ACK        gate=AGGREGATE retry=0 flushed=True
+   PROCESSED entre os agregados: 0
+E) evento de controle intent_expired (FORWARD) -> Lyra real responde SEM LLM -> notificacao -> Harpa(Chatwoot stand-in)
+   relay: {'sent': 4, 'failed': 0}
+--- esperado: intent_expired PROCESSED, gate=FORWARD
+   seq=6   intent_expired             PROCESSED  gate=FORWARD   retry=0 flushed=False
+   Chatwoot recebeu: {"path": "/api/v1/accounts/1/conversations/77/messages", "token": "token-chatwoot-teste", "body": {"content": "Passou um tempo desde o seu pedido e preciso confirmar com voc\u00ea antes de finalizar. Voc\u00ea ainda deseja seguir
+F) evento corrompido -> 422 -> retries -> DLQ -> RECONCILING
+--- esperado: veneno.teste DEAD_LETTER retry=3
+   seq=7   veneno.teste               DEAD_LETTER gate=None      retry=3 flushed=False
+   estado operacional: RECONCILING

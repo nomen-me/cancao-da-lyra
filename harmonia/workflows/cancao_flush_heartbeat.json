@@ -1,0 +1,672 @@
+{
+ "name": "Synapse — Canção — Flush, Heartbeat e Reconciliação (Harmonia)",
+ "nodes": [
+  {
+   "parameters": {
+    "rule": {
+     "interval": [
+      {
+       "field": "minutes",
+       "minutesInterval": 1
+      }
+     ]
+    }
+   },
+   "id": "n101",
+   "name": "Agendador — a cada 1 min (flush)",
+   "type": "n8n-nodes-base.scheduleTrigger",
+   "typeVersion": 1,
+   "position": [
+    200,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.aggregation_due",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({})}}",
+    "options": {}
+   },
+   "id": "n102",
+   "name": "Ritmo — Grupos vencidos (MAX_EVENTS ou MAX_WAIT)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    440,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst due = ($input.first().json.message || []);\nif (!due.length) return [{ json: { vazio: true } }];\nreturn due.map(g => ({ json: g }));"
+   },
+   "id": "n103",
+   "name": "Um item por grupo",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    680,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.vazio !== true}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n104",
+   "name": "Há grupo?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    900,
+    200
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.aggregation_flush",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({agg_key: $json.agg_key})}}",
+    "options": {}
+   },
+   "id": "n105",
+   "name": "Ritmo — Flush do grupo",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1120,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "url": "={{$env.LYRA_CENTRAL_URL}}/v1/decide",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "name": "Authorization",
+       "value": "=Bearer {{$env.LYRA_API_KEY}}"
+      },
+      {
+       "name": "X-Tenant-ID",
+       "value": "={{$env.LYRA_TENANT_ID}}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({trigger: 'aggregate', events: $json.message.events})}}",
+    "options": {
+     "timeout": 60000
+    }
+   },
+   "id": "n106",
+   "name": "Lyra Central — Decide (lote agregado)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1360,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst g = $node['Um item por grupo'].json;\nconst flush = $node['Ritmo — Flush do grupo'].json.message || {};\nconst ops = ($input.first().json.operations || []);\nif (!ops.length) return [{ json: { event_ids: flush.event_ids, sem_operacao: true } }];\nreturn ops.map(o => ({ json: { event_ids: flush.event_ids, operation: o, sem_operacao: false } }));"
+   },
+   "id": "n107",
+   "name": "Monta Operações do Lote",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1600,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.sem_operacao === false}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n108",
+   "name": "Lote tem operação?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1840,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.execute",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({operation: $json.operation})}}",
+    "options": {}
+   },
+   "id": "n109",
+   "name": "Ritmo — Executa (lote)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2080,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.outbox_processed",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({event_ids: $node[\"Monta Operações do Lote\"].json.event_ids})}}",
+    "options": {}
+   },
+   "id": "n110",
+   "name": "Ritmo — PROCESSED (lote)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2320,
+    100
+   ]
+  },
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "synapse-flush-agora",
+    "responseMode": "onReceived",
+    "options": {}
+   },
+   "id": "n111",
+   "name": "Webhook — Flush imediato (chamado pela ingestão)",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    200,
+    0
+   ]
+  },
+  {
+   "parameters": {
+    "rule": {
+     "interval": [
+      {
+       "field": "minutes",
+       "minutesInterval": 1
+      }
+     ]
+    }
+   },
+   "id": "n112",
+   "name": "Agendador — a cada 1 min (heartbeat)",
+   "type": "n8n-nodes-base.scheduleTrigger",
+   "typeVersion": 1,
+   "position": [
+    200,
+    600
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.heartbeat",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({})}}",
+    "options": {}
+   },
+   "id": "n113",
+   "name": "Ritmo — Heartbeat (watermark/lacunas/atraso)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    440,
+    600
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{$json.message.state === 'RECONCILING'}}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "n114",
+   "name": "Estado é RECONCILING?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    680,
+    600
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.reconcile",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({})}}",
+    "options": {}
+   },
+   "id": "n115",
+   "name": "Ritmo — Reconcilia (replay + autoridade)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    920,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.outbox_replay",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({from_seq: 0})}}",
+    "options": {}
+   },
+   "id": "n116",
+   "name": "Ritmo — Reenvio de pendentes (replay)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1160,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "\nconst evs = $input.first().json.message || [];\nif (!evs.length) return [{ json: { replay: 0 } }];\nreturn evs.map(e => ({ json: e }));"
+   },
+   "id": "n117",
+   "name": "Reentrega ao webhook de ingestão",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1400,
+    500
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.HARMONIA_DOMAIN}}/webhook/synapse-evento",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify($json)}}",
+    "options": {}
+   },
+   "id": "n118",
+   "name": "Harmonia — Reingesta evento",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1640,
+    500
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/synapse_core.api.declare_consistent",
+    "method": "POST",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{JSON.stringify({})}}",
+    "options": {}
+   },
+   "id": "n119",
+   "name": "Ritmo — Declara CONSISTENT_STATE (só se comprovado)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1880,
+    500
+   ]
+  }
+ ],
+ "connections": {
+  "Agendador — a cada 1 min (flush)": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Grupos vencidos (MAX_EVENTS ou MAX_WAIT)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Webhook — Flush imediato (chamado pela ingestão)": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Grupos vencidos (MAX_EVENTS ou MAX_WAIT)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Grupos vencidos (MAX_EVENTS ou MAX_WAIT)": {
+   "main": [
+    [
+     {
+      "node": "Um item por grupo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Um item por grupo": {
+   "main": [
+    [
+     {
+      "node": "Há grupo?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Há grupo?": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Flush do grupo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Flush do grupo": {
+   "main": [
+    [
+     {
+      "node": "Lyra Central — Decide (lote agregado)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Lyra Central — Decide (lote agregado)": {
+   "main": [
+    [
+     {
+      "node": "Monta Operações do Lote",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Monta Operações do Lote": {
+   "main": [
+    [
+     {
+      "node": "Lote tem operação?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Lote tem operação?": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Executa (lote)",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Ritmo — PROCESSED (lote)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Executa (lote)": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — PROCESSED (lote)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Agendador — a cada 1 min (heartbeat)": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Heartbeat (watermark/lacunas/atraso)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Heartbeat (watermark/lacunas/atraso)": {
+   "main": [
+    [
+     {
+      "node": "Estado é RECONCILING?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Estado é RECONCILING?": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Reconcilia (replay + autoridade)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Reconcilia (replay + autoridade)": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Reenvio de pendentes (replay)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ritmo — Reenvio de pendentes (replay)": {
+   "main": [
+    [
+     {
+      "node": "Reentrega ao webhook de ingestão",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Reentrega ao webhook de ingestão": {
+   "main": [
+    [
+     {
+      "node": "Harmonia — Reingesta evento",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Harmonia — Reingesta evento": {
+   "main": [
+    [
+     {
+      "node": "Ritmo — Declara CONSISTENT_STATE (só se comprovado)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "synapse_core"
+authors = [{ name = "Nomen", email = "dev@nomen.me" }]
+description = "Synapse Core: Transactional Outbox, autoridade de execucao (optimistic lock, TTL, idempotencia), reconciliacao e DLQ no Ritmo."
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = []
+
+[tool.bench.frappe-dependencies]
+frappe = ">=15.0.0,<16.0.0"
+erpnext = ">=15.0.0,<16.0.0"

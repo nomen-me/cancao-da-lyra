@@ -1,0 +1,477 @@
+{
+ "name": "Synapse W0 — Link de Pagamento por Variante",
+ "nodes": [
+  {
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "synapse-checkout",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "id": "webhook-checkout",
+   "name": "Webhook — Solicitação de Checkout",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 1,
+   "position": [
+    240,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst item_id     = (body.item_id || '').trim().toUpperCase();\nconst canal       = (body.canal || 'web').toLowerCase();\nconst conversa_id = body.conversa_id || null;\nconst telefone    = (body.telefone || '').replace(/\\D/g, '');\nconst nome        = body.nome || 'Cliente';\nconst email       = body.email || '';\n\nif (!item_id) throw new Error('item_id é obrigatório');\n\nconst VALIDOS = [\n  'SYNAPSE-ASSINATURA-ESS-BASE',\n  'SYNAPSE-ASSINATURA-ESS-CAPT',\n  'SYNAPSE-ASSINATURA-ESS-W2',\n  'SYNAPSE-ASSINATURA-ESS-W4',\n  'SYNAPSE-ASSINATURA-NEG-BASE',\n  'SYNAPSE-ASSINATURA-NEG-CAPT',\n  'SYNAPSE-ASSINATURA-NEG-W2',\n  'SYNAPSE-ASSINATURA-NEG-W4',\n  'SYNAPSE-ASSINATURA-PRO-BASE',\n  'SYNAPSE-ASSINATURA-PRO-CAPT',\n  'SYNAPSE-ASSINATURA-PRO-W2',\n  'SYNAPSE-ASSINATURA-PRO-W4',\n  'SYNAPSE-ASSINATURA-ENT-BASE',\n  'SYNAPSE-ASSINATURA-ENT-CAPT',\n  'SYNAPSE-ASSINATURA-ENT-W2',\n  'SYNAPSE-ASSINATURA-ENT-W4'\n];\n\nif (!VALIDOS.includes(item_id)) {\n  throw new Error(`Variante inválida: ${item_id}`);\n}\n\nreturn [{ json: { item_id, canal, conversa_id, telefone, nome, email } }];"
+   },
+   "id": "validate-input",
+   "name": "Valida e Extrai Payload",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/method/frappe.client.get_value",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"doctype\": \"Item Price\", \"filters\": {\"item_code\": \"{{$json.item_id}}\", \"price_list\": \"Venda Padrão\", \"selling\": 1}, \"fieldname\": [\"price_list_rate\", \"item_code\"]}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "consulta-erpnext",
+   "name": "ERPNext — Consulta Preço da Variante",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const result = $input.first().json;\nconst preco = result?.message?.price_list_rate;\nconst item_id = $node['Valida e Extrai Payload'].json.item_id;\n\nif (!preco || preco <= 0) {\n  throw new Error(`Preço não encontrado para ${item_id}. Verifique a lista de preços Venda Padrão no ERPNext.`);\n}\n\nconst NOMES = {\n  'SYNAPSE-ASSINATURA-ESS-BASE':  'Synapse Essencial',\n  'SYNAPSE-ASSINATURA-ESS-CAPT':  'Synapse Essencial + Captação',\n  'SYNAPSE-ASSINATURA-ESS-W2':    'Synapse Essencial + Logística',\n  'SYNAPSE-ASSINATURA-ESS-W4':    'Synapse Essencial + Pós-venda',\n  'SYNAPSE-ASSINATURA-NEG-BASE':  'Synapse Negócio',\n  'SYNAPSE-ASSINATURA-NEG-CAPT':  'Synapse Negócio + Captação',\n  'SYNAPSE-ASSINATURA-NEG-W2':    'Synapse Negócio + Logística',\n  'SYNAPSE-ASSINATURA-NEG-W4':    'Synapse Negócio + Pós-venda',\n  'SYNAPSE-ASSINATURA-PRO-BASE':  'Synapse Profissional',\n  'SYNAPSE-ASSINATURA-PRO-CAPT':  'Synapse Profissional + Captação',\n  'SYNAPSE-ASSINATURA-PRO-W2':    'Synapse Profissional + Logística',\n  'SYNAPSE-ASSINATURA-PRO-W4':    'Synapse Profissional + Pós-venda',\n  'SYNAPSE-ASSINATURA-ENT-BASE':  'Synapse Enterprise',\n  'SYNAPSE-ASSINATURA-ENT-CAPT':  'Synapse Enterprise + Captação',\n  'SYNAPSE-ASSINATURA-ENT-W2':    'Synapse Enterprise + Logística',\n  'SYNAPSE-ASSINATURA-ENT-W4':    'Synapse Enterprise + Pós-venda'\n};\n\nreturn [{\n  json: {\n    item_id,\n    nome_plano: NOMES[item_id] || item_id,\n    preco: parseFloat(preco),\n    canal: $node['Valida e Extrai Payload'].json.canal,\n    conversa_id: $node['Valida e Extrai Payload'].json.conversa_id,\n    telefone: $node['Valida e Extrai Payload'].json.telefone,\n    nome: $node['Valida e Extrai Payload'].json.nome,\n    email: $node['Valida e Extrai Payload'].json.email\n  }\n}];"
+   },
+   "id": "processa-preco",
+   "name": "Processa Preço e Metadados",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    900,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Sales Order",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ doctype: \"Sales Order\", customer: $json.email || $json.telefone, customer_name: $json.nome, delivery_date: new Date(Date.now() + 86400000).toISOString().slice(0,10), items: [{ item_code: $json.item_id, qty: 1, rate: $json.preco }], custom_infinitepay_charge_id: \"\" }) }}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "cria-pedido-erpnext",
+   "name": "ERPNext — Cria Pedido Pendente",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1120,
+    400
+   ],
+   "notes": "Assume que o Customer (email ou telefone) já existe — se puder vir inexistente, adicionar um passo de \"criar Customer se não existir\" antes deste."
+  },
+  {
+   "parameters": {
+    "url": "https://api.infinitepay.io/v2/charges",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=Bearer {{$env.INFINITEPAY_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"amount\": {{ Math.round($node['Processa Preço e Metadados'].json.preco * 100) }}, \"currency\": \"BRL\", \"payment_method\": \"pix\", \"capture\": true, \"description\": \"{{$node['Processa Preço e Metadados'].json.nome_plano}} — Assinatura Synapse\", \"metadata\": {\"item_id\": \"{{$node['Processa Preço e Metadados'].json.item_id}}\", \"nome\": \"{{$node['Processa Preço e Metadados'].json.nome}}\", \"email\": \"{{$node['Processa Preço e Metadados'].json.email}}\", \"canal\": \"{{$node['Processa Preço e Metadados'].json.canal}}\", \"sales_order\": \"{{$node['ERPNext — Cria Pedido Pendente'].json.data.name}}\"}, \"pix\": {\"expiration_date\": \"{{$now.plus({hours: 24}).toISO()}}\"}}",
+    "method": "POST"
+   },
+   "id": "gera-pix",
+   "name": "InfinitePay — Gera Pix",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1340,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "jsCode": "const pix = $input.first().json;\nconst meta = $node['Processa Preço e Metadados'].json;\n\nif (!pix.id || !pix.pix?.qr_code) {\n  throw new Error('InfinitePay não retornou QR Code. Verifique token e configuração da conta.');\n}\n\nreturn [{\n  json: {\n    charge_id:   pix.id,\n    qr_code:     pix.pix.qr_code,\n    qr_code_url: pix.pix.qr_code_url || null,\n    valor:       meta.preco,\n    nome_plano:  meta.nome_plano,\n    item_id:     meta.item_id,\n    canal:       meta.canal,\n    conversa_id: meta.conversa_id,\n    telefone:    meta.telefone,\n    nome:        meta.nome\n  }\n}];"
+   },
+   "id": "extrai-pix",
+   "name": "Extrai Link e QR Code",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    1560,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "string": [
+      {
+       "value1": "={{$json.canal}}",
+       "operation": "equal",
+       "value2": "web"
+      }
+     ]
+    }
+   },
+   "id": "rota-canal",
+   "name": "Canal: Web ou WhatsApp?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    1780,
+    400
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={\"status\": \"ok\", \"charge_id\": \"{{$json.charge_id}}\", \"nome_plano\": \"{{$json.nome_plano}}\", \"valor\": {{$json.valor}}, \"pix\": {\"qr_code\": \"{{$json.qr_code}}\", \"qr_code_url\": \"{{$json.qr_code_url}}\"}}",
+    "options": {
+     "responseCode": 200
+    }
+   },
+   "id": "resposta-web",
+   "name": "Resposta Web — Devolve Link",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    2000,
+    280
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.CHATWOOT_DOMAIN}}/api/v1/accounts/1/conversations/{{$json.conversa_id}}/messages",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "api_access_token",
+       "value": "{{$env.CHATWOOT_API_TOKEN}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={\"content\": \"Perfeito, *{{$json.nome}}*! 🎉\\n\\nSeu plano: *{{$json.nome_plano}}*\\nValor: *R$ {{$json.valor.toFixed(2).replace(\\\".\\\",\\\",\")}}/mês*\\n\\nPague via Pix copiando o código abaixo:\\n\\n`{{$json.qr_code}}`\\n\\n⏰ Válido por 24 horas. Após o pagamento sua conta é activada automaticamente!\", \"message_type\": \"outgoing\", \"private\": false}",
+    "method": "POST"
+   },
+   "id": "whatsapp-link",
+   "name": "WhatsApp — Injeta Link na Conversa",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    2000,
+    520
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Customer",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      }
+     ]
+    },
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "filters",
+       "value": "={{ JSON.stringify([[\"name\",\"in\",[$json.email, $json.telefone]]]) }}"
+      },
+      {
+       "name": "fields",
+       "value": "[\"name\"]"
+      },
+      {
+       "name": "limit_page_length",
+       "value": "1"
+      }
+     ]
+    },
+    "options": {},
+    "method": "GET"
+   },
+   "id": "verifica-cliente",
+   "name": "ERPNext — Verifica Cliente Existente",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    680,
+    300
+   ],
+   "continueOnFail": true
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{ ($json.data || []).length > 0 }}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "cliente-existe",
+   "name": "Cliente Já Existe?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    900,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "url": "=https://{{$env.ERPNEXT_DOMAIN}}/api/resource/Customer",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "=token {{$env.ERPNEXT_API_KEY}}:{{$env.ERPNEXT_API_SECRET}}"
+      },
+      {
+       "name": "Content-Type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ customer_name: $node['Processa Preço e Metadados'].json.nome, name: $node['Processa Preço e Metadados'].json.email || $node['Processa Preço e Metadados'].json.telefone, mobile_no: $node['Processa Preço e Metadados'].json.telefone, email_id: $node['Processa Preço e Metadados'].json.email }) }}",
+    "options": {},
+    "method": "POST"
+   },
+   "id": "cria-cliente",
+   "name": "ERPNext — Cria Cliente (se não existir)",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4,
+   "position": [
+    1120,
+    380
+   ]
+  },
+  {
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={ \"status\": \"ok\", \"mensagem\": \"Pix enviado para o WhatsApp do cliente.\" }",
+    "options": {}
+   },
+   "id": "resposta-whatsapp",
+   "name": "Resposta WhatsApp — Confirma Envio",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1,
+   "position": [
+    2000,
+    500
+   ]
+  }
+ ],
+ "connections": {
+  "Webhook — Solicitação de Checkout": {
+   "main": [
+    [
+     {
+      "node": "Valida e Extrai Payload",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Valida e Extrai Payload": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Consulta Preço da Variante",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "ERPNext — Consulta Preço da Variante": {
+   "main": [
+    [
+     {
+      "node": "Processa Preço e Metadados",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Processa Preço e Metadados": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Verifica Cliente Existente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "ERPNext — Cria Pedido Pendente": {
+   "main": [
+    [
+     {
+      "node": "InfinitePay — Gera Pix",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "InfinitePay — Gera Pix": {
+   "main": [
+    [
+     {
+      "node": "Extrai Link e QR Code",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Extrai Link e QR Code": {
+   "main": [
+    [
+     {
+      "node": "Canal: Web ou WhatsApp?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Canal: Web ou WhatsApp?": {
+   "main": [
+    [
+     {
+      "node": "Resposta Web — Devolve Link",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "WhatsApp — Injeta Link na Conversa",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "ERPNext — Verifica Cliente Existente": {
+   "main": [
+    [
+     {
+      "node": "Cliente Já Existe?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Cliente Já Existe?": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Cria Pedido Pendente",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "ERPNext — Cria Cliente (se não existir)",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "ERPNext — Cria Cliente (se não existir)": {
+   "main": [
+    [
+     {
+      "node": "ERPNext — Cria Pedido Pendente",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "WhatsApp — Injeta Link na Conversa": {
+   "main": [
+    [
+     {
+      "node": "Resposta WhatsApp — Confirma Envio",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}
