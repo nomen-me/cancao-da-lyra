@@ -1,1 +1,0 @@
-      <div class="htab" data-page="aprovacoes" onclick="nav('aprovacoes',this)"><span class="hicon"><i class="fa-solid fa-user-check"></i></span>Aprovações</div>
